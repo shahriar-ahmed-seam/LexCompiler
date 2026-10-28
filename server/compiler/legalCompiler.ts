@@ -28,13 +28,27 @@ export function compileLegalProseToFormalPolicy(
   clauseId: string,
   citation: string
 ): { deontic: DeonticExtraction; compiled: CompiledPolicyArtifacts } {
-  const normalized = rawText.trim();
+  const banglaDigitMap: Record<string, string> = {
+    '০': '0',
+    '১': '1',
+    '২': '2',
+    '৩': '3',
+    '৪': '4',
+    '৫': '5',
+    '৬': '6',
+    '৭': '7',
+    '৮': '8',
+    '৯': '9',
+  };
+  const normalized = rawText
+    .trim()
+    .replace(/[০-৯]/g, (d) => banglaDigitMap[d] || d);
   const lower = normalized.toLowerCase();
 
-  // Extract temporal retention bounds from natural language ("within 72 hours", "within 30 days", etc.)
+  // Extract temporal retention bounds from English or Bangla natural language ("within 72 hours", "৭২ ঘণ্টা", "30 days", "৩০ দিন")
   let maxRetentionHours = 720; // default 30 days = 720 hours
-  const hoursMatch = lower.match(/(\d+)\s*(?:hours|hour|hrs|hr|h)\b/);
-  const daysMatch = lower.match(/(\d+)\s*(?:days|day|d)\b/);
+  const hoursMatch = lower.match(/(\d+)\s*(?:hours|hour|hrs|hr|h|ঘণ্টা|ঘন্টা)\b/);
+  const daysMatch = lower.match(/(\d+)\s*(?:days|day|d|দিন)\b/);
   if (hoursMatch) {
     maxRetentionHours = parseInt(hoursMatch[1], 10);
   } else if (daysMatch) {
@@ -42,9 +56,9 @@ export function compileLegalProseToFormalPolicy(
   }
   const maxRetentionDays = Math.max(1, Math.round((maxRetentionHours / 24) * 10) / 10);
 
-  // Extract tenant-isolated KMS key requirement
+  // Extract tenant-isolated KMS key requirement (English + Bangla)
   const requiresTenantIsolatedKeys =
-    /tenant[- ]isolated|tenant[- ]specific|per[- ]tenant|customer[- ]managed\s+key|tenant_kms/i.test(
+    /tenant[- ]isolated|tenant[- ]specific|per[- ]tenant|customer[- ]managed\s+key|tenant_kms|টেন্যান্ট/i.test(
       normalized
     );
 
@@ -518,6 +532,21 @@ export function getMutationPresets(): RegulatoryMutationPreset[] {
       mutatedLawText:
         'Section 4.2 (Ultra-Strict Ephemeral Mandate): All Personal Identifiable Information (PII) and PHI must be encrypted at rest with tenant-isolated keys (per-tenant KMS envelope) and purged within 24 hours across all storage tiers and Redis caches.',
       parameterDiffSummary: 'max_ttl_hours: 72h → 24h | requires_tenant_kms: true',
+      blastRadiusNodeIds: ['node-postgres-schema', 'node-fastapi-endpoint', 'node-redis-worker'],
+    },
+    {
+      id: 'PRESET-BANGLADESH-BANK-48H',
+      name: 'Bangladesh Bank ICT Guideline v4.0 (বাংলাদেশ ব্যাংক নীতিমালা): ৪৮ ঘণ্টা রিটেনশন ও টেন্যান্ট KMS',
+      badge: 'BANGLA / BD FINTECH',
+      frameworkId: 'ENTERPRISE_DPA',
+      clauseId: 'CLAUSE-DPA-4.2',
+      description:
+        'Compiles bilingual Bangla + English regulatory prose from Bangladesh Bank ICT Security Guideline & Cyber Security Act (৪৮ ঘণ্টা / 48 hours purge + টেন্যান্ট KMS key isolation) directly into Z3 SMT-LIB2.',
+      previousLawExcerpt:
+        'PII must be purged within 72 hours.',
+      mutatedLawText:
+        'ধারা ৪.২ (বাংলাদেশ ব্যাংক আইসিটি নিরাপত্তা নীতিমালা ও সাইবার নিরাপত্তা আইন / Bangladesh Bank ICT Guideline §4.2): গ্রাহকের সকল ব্যক্তিগত ও আর্থিক তথ্য (PII/PHI) অবশ্যই টেন্যান্ট-আইসোলেটেড KMS কী (tenant-isolated keys) দ্বারা এনক্রিপ্টেড থাকতে হবে এবং ৪৮ ঘণ্টা (48 hours)-এর মধ্যে ডাটাবেস ও ক্যাশ থেকে সম্পূর্ণরূপে মুছে ফেলতে হবে।',
+      parameterDiffSummary: 'lang: বাংলা+EN | max_ttl_hours: 48h (৪৮ ঘণ্টা) | tenant_kms: true',
       blastRadiusNodeIds: ['node-postgres-schema', 'node-fastapi-endpoint', 'node-redis-worker'],
     },
   ];

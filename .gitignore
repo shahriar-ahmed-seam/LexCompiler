@@ -2,5 +2,8 @@ node_modules/
 dist/
 dist-server/
 data/
-*.png
+.venv/
+video-build/
+/*.png
+/*.mp4
 .env
