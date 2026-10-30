@@ -1,6 +1,6 @@
 # LexCompiler handoff
 
-Updated October 30, 2026, after PR #37. Judging is on **December 26, 2026**.
+Updated October 30, 2026, after PR #38. Judging is on **December 26, 2026**.
 
 This file covers where the work stands, how to run the demo, the demo-video script, and what's next. The full plan is in `docs/PRODUCT_GUIDE.md`: section 4 has the build phases, section 5 covers AI, RAG and MCP, and section 7 has the schedule.
 
@@ -19,6 +19,7 @@ This file covers where the work stands, how to run the demo, the demo-video scri
 | #34 | Product guide section 5: AI, RAG, MCP, setup for coding assistants |
 | #35, #36 | Phase 2a: RAG embeddings, duration parser, honest labels, AI gateway, extraction eval |
 | #37 | The demo cycle: the web app, password sign-in, the rule card with AI drafting, exceptions, the MCP server for coding assistants, the signed evidence log and share links |
+| #38 | Copy fix: the empty Exceptions inbox now says "Legal decides" to non-Legal roles instead of "you decide" |
 
 | Phase | Status |
 |---|---|
