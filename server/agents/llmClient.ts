@@ -55,9 +55,14 @@ export interface ChatResult {
 
 const DEFAULT_BASE: Record<Provider, string> = { openai: 'https://api.openai.com/v1', anthropic: 'https://api.anthropic.com/v1' };
 
+/** The env prefix for a task or agent: agent-z3-formal-critic → LEXCOMPILER_AGENT_Z3_FORMAL_CRITIC_. */
+export function agentEnvPrefix(agentId: string): string {
+  return `LEXCOMPILER_AGENT_${agentId.replace(/^agent-/, '').replace(/[^a-z0-9]+/gi, '_').toUpperCase()}_`;
+}
+
 /** Per-agent config (LEXCOMPILER_AGENT_<ID>_*) falling back to LEXCOMPILER_LLM_*; null when unset. */
 export function llmConfigFor(agentId: string | null, env: NodeJS.ProcessEnv = process.env): LlmConfig | null {
-  const key = agentId ? `LEXCOMPILER_AGENT_${agentId.replace(/^agent-/, '').replace(/[^a-z0-9]+/gi, '_').toUpperCase()}_` : '';
+  const key = agentId ? agentEnvPrefix(agentId) : '';
   const pick = (name: string) => (key && env[`${key}${name}`]) || env[`LEXCOMPILER_LLM_${name}`];
   const model = pick('MODEL');
   if (!model) return null;

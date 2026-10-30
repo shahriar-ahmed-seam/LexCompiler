@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import { performance } from 'node:perf_hooks';
-import { chat, llmConfigFor, type ChatMessage, type ChatResult, type LlmConfig, type LlmUsage, type ToolSpec } from '../agents/llmClient.js';
+import { agentEnvPrefix, chat, llmConfigFor, type ChatMessage, type ChatResult, type LlmConfig, type LlmUsage, type ToolSpec } from '../agents/llmClient.js';
 import { getDb, nowIso, type Db } from '../db/index.js';
 import { sha256Hex } from '../util/hash.js';
 
@@ -13,6 +13,90 @@ import { sha256Hex } from '../util/hash.js';
 export type AiMode = 'off' | 'local' | 'cloud';
 export const AI_MODES: AiMode[] = ['off', 'local', 'cloud'];
 export const DEFAULT_DAILY_TOKEN_BUDGET = 200_000;
+/** Cloud tokens per UTC day for all agents together, unless LEXCOMPILER_AGENT_MAX_DAILY_TOKENS says otherwise. */
+export const DEFAULT_AGENT_DAILY_TOKENS = 100_000;
+/** Largest answer one relayed agent call may ask for. */
+const AGENT_MAX_OUTPUT_TOKENS = 4096;
+const AGENT_DEFAULT_OUTPUT_TOKENS = 2048;
+
+/** The agents' daily cloud-token budget is used up. */
+export class AgentBudgetError extends Error {
+  readonly status = 429;
+  constructor(
+    readonly used: number,
+    readonly budget: number
+  ) {
+    super(`The agents' daily model budget is used up (${used.toLocaleString('en-US')} of ${budget.toLocaleString('en-US')} tokens). It resets at 00:00 UTC; LEXCOMPILER_AGENT_MAX_DAILY_TOKENS sets it.`);
+  }
+}
+
+/** A relayed agent call that cannot be served; `status` is the HTTP status for the agent. */
+export class AgentRelayError extends Error {
+  constructor(
+    readonly status: number,
+    message: string
+  ) {
+    super(message);
+  }
+}
+
+/** Fields of an OpenAI chat-completions request that are passed on to the agent's model. */
+const RELAY_FIELDS = [
+  'messages',
+  'tools',
+  'tool_choice',
+  'parallel_tool_calls',
+  'temperature',
+  'top_p',
+  'stop',
+  'seed',
+  'response_format',
+  'max_tokens',
+  'max_completion_tokens',
+  'frequency_penalty',
+  'presence_penalty',
+] as const;
+
+/**
+ * The request sent to the agent's model: known fields only, the configured model, a capped
+ * answer size, and JSON-schema output rewritten for providers without it (DeepSeek takes
+ * json_object, so the schema goes into the system prompt instead).
+ */
+export function relayBody(body: Record<string, unknown>, cfg: LlmConfig): Record<string, unknown> {
+  const wire: Record<string, unknown> = { model: cfg.model, stream: false };
+  for (const k of RELAY_FIELDS) if (body[k] !== undefined && body[k] !== null) wire[k] = body[k];
+  const sizeField = wire.max_completion_tokens !== undefined ? 'max_completion_tokens' : 'max_tokens';
+  const asked = Number(wire[sizeField]);
+  wire[sizeField] = Math.min(Number.isFinite(asked) && asked > 0 ? Math.floor(asked) : AGENT_DEFAULT_OUTPUT_TOKENS, AGENT_MAX_OUTPUT_TOKENS);
+
+  let messages = [...(wire.messages as Array<Record<string, unknown>>)];
+  const format = wire.response_format as { type?: string; json_schema?: { schema?: unknown } } | undefined;
+  if (format?.type === 'json_schema' && cfg.jsonMode !== 'schema') {
+    const hasTools = Array.isArray(wire.tools) && wire.tools.length > 0;
+    const schema = JSON.stringify(format.json_schema?.schema ?? {});
+    const instruction = hasTools
+      ? `When you have what you need from the tools, give your final answer as only one JSON object that matches this JSON Schema:\n${schema}`
+      : `Reply with only one JSON object that matches this JSON Schema:\n${schema}`;
+    // json_object mode makes the model write JSON instead of calling tools, so it is set only when there are none.
+    if (cfg.jsonMode === 'object' && !hasTools) wire.response_format = { type: 'json_object' };
+    else delete wire.response_format;
+    const first = messages[0];
+    messages =
+      first?.role === 'system' && typeof first.content === 'string'
+        ? [{ ...first, content: `${first.content}\n\n${instruction}` }, ...messages.slice(1)]
+        : [{ role: 'system', content: instruction }, ...messages];
+  }
+  wire.messages = messages;
+  // Strict tool schemas need json_schema support (DeepSeek offers them on its beta endpoint only).
+  if (cfg.jsonMode !== 'schema' && Array.isArray(wire.tools)) {
+    wire.tools = (wire.tools as Array<{ type?: string; function?: Record<string, unknown> }>).map((t) => {
+      if (!t.function || !('strict' in t.function)) return t;
+      const { strict: _strict, ...fn } = t.function;
+      return { ...t, function: fn };
+    });
+  }
+  return wire;
+}
 
 export interface WorkspaceAiSettings {
   mode: AiMode;
@@ -252,6 +336,87 @@ export class AiGateway {
     }
   }
 
+  // ---------------------------------------------------------------- agents
+
+  /** Cloud tokens the agents may use per UTC day (LEXCOMPILER_AGENT_MAX_DAILY_TOKENS, default 100,000). Local models are free and not counted. */
+  agentBudget(): number {
+    const n = Number(this.env.LEXCOMPILER_AGENT_MAX_DAILY_TOKENS);
+    return Number.isFinite(n) && n >= 0 && this.env.LEXCOMPILER_AGENT_MAX_DAILY_TOKENS?.trim() ? n : DEFAULT_AGENT_DAILY_TOKENS;
+  }
+
+  /** Cloud tokens used today by agent calls (tasks named agent-…). */
+  agentTokensToday(now = new Date()): number {
+    const since = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())).toISOString();
+    const r = this.db
+      .prepare(`SELECT COALESCE(SUM(input_tokens + output_tokens), 0) AS n FROM ai_calls WHERE task LIKE 'agent-%' AND mode = 'cloud' AND created_at >= ?`)
+      .get(since) as Row;
+    return Number(r.n);
+  }
+
+  private assertAgentBudget(cfg: LlmConfig, task: string): void {
+    if (!task.startsWith('agent-') || isLocalHost(cfg.baseUrl)) return;
+    const used = this.agentTokensToday();
+    const budget = this.agentBudget();
+    if (used >= budget) throw new AgentBudgetError(used, budget);
+  }
+
+  /**
+   * Relays one OpenAI-style chat completion for an agent to the model configured for it
+   * (LEXCOMPILER_AGENT_<ID>_*). The agent frameworks (CrewAI, DSPy, Pydantic-AI, the OpenAI
+   * Agents SDK) never see a provider key; the call is budgeted and logged like every other.
+   */
+  async relayAgentChat(agentId: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    if (!/^agent-[a-z0-9-]{1,60}$/.test(agentId)) throw new AgentRelayError(400, `"model" must be an agent id such as agent-z3-formal-critic, got "${agentId.slice(0, 80)}".`);
+    const cfg = llmConfigFor(agentId, this.env);
+    if (!cfg) throw new AgentRelayError(404, `No model is configured for ${agentId}. Set ${agentEnvPrefix(agentId)}MODEL (and PROVIDER, BASE_URL, API_KEY) on the server.`);
+    if (cfg.provider !== 'openai') throw new AgentRelayError(501, `${agentId} is configured for the ${cfg.provider} API; the agent route relays OpenAI-compatible APIs only (Anthropic also offers one at https://api.anthropic.com/v1).`);
+    if (body.stream) throw new AgentRelayError(400, 'Streaming is not supported on the agent route; send stream: false.');
+    if (!Array.isArray(body.messages) || body.messages.length === 0) throw new AgentRelayError(400, '"messages" must be a non-empty array.');
+    this.assertAgentBudget(cfg, agentId);
+
+    const wire = relayBody(body, cfg);
+    const t0 = performance.now();
+    const promptSha256 = sha256Hex(JSON.stringify(wire.messages));
+    const mode: AiMode = isLocalHost(cfg.baseUrl) ? 'local' : 'cloud';
+    const meta = { workspaceId: null, task: agentId, mode, cfg, promptSha256 };
+    let res: Response;
+    try {
+      res = await fetch(`${cfg.baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(cfg.apiKey ? { Authorization: `Bearer ${cfg.apiKey}` } : {}) },
+        body: JSON.stringify(wire),
+        signal: AbortSignal.timeout(180_000),
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.log({ ...meta, usage: EMPTY_USAGE(), latencyMs: Math.round(performance.now() - t0), outcome: 'error', error: message });
+      throw new AgentRelayError(502, `The model endpoint ${new URL(cfg.baseUrl).host} did not answer: ${message}`);
+    }
+    const text = await res.text();
+    const latencyMs = Math.round(performance.now() - t0);
+    if (!res.ok) {
+      this.log({ ...meta, usage: EMPTY_USAGE(), latencyMs, outcome: 'error', error: `(${res.status}) ${text.slice(0, 300)}` });
+      // A rejected request (4xx) is passed on as 400, so SDK clients do not retry it.
+      throw new AgentRelayError(res.status >= 500 ? 502 : 400, `${new URL(cfg.baseUrl).host} answered ${res.status}: ${text.slice(0, 300)}`);
+    }
+    let out: Record<string, unknown>;
+    try {
+      out = JSON.parse(text) as Record<string, unknown>;
+    } catch {
+      this.log({ ...meta, usage: EMPTY_USAGE(), latencyMs, outcome: 'error', error: 'non-JSON answer' });
+      throw new AgentRelayError(502, `${new URL(cfg.baseUrl).host} answered with something that is not JSON.`);
+    }
+    const u = (out.usage || {}) as { prompt_tokens?: number; completion_tokens?: number; prompt_tokens_details?: { cached_tokens?: number }; prompt_cache_hit_tokens?: number };
+    const usage: LlmUsage = {
+      promptTokens: u.prompt_tokens ?? 0,
+      completionTokens: u.completion_tokens ?? 0,
+      cachedPromptTokens: u.prompt_tokens_details?.cached_tokens ?? u.prompt_cache_hit_tokens ?? 0,
+      cacheWriteTokens: 0,
+    };
+    this.log({ ...meta, usage, latencyMs, outcome: 'ok' });
+    return out;
+  }
+
   /** A logged chat turn with tools, for the agent runtime (which runs its own tool loop). */
   async chatLogged(
     cfg: LlmConfig,
@@ -260,6 +425,7 @@ export class AiGateway {
     opts: { jsonSchema?: Record<string, unknown>; maxTokens?: number; timeoutMs?: number },
     meta: { workspaceId: string | null; task: string }
   ): Promise<ChatResult> {
+    this.assertAgentBudget(cfg, meta.task);
     const t0 = performance.now();
     const promptSha256 = sha256Hex(JSON.stringify(messages));
     const mode: AiMode = isLocalHost(cfg.baseUrl) ? 'local' : 'cloud';
