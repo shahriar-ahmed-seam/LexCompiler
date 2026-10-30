@@ -1007,7 +1007,7 @@ cd agents && ../.venv-agents/bin/python -m lexcompiler_agents agent-z3-formal-cr
 |---|---|---|---|
 | `agent-horizon-scanner` | CrewAI 1.15 | agent route | 13 live feed items classified; 3 calls, 8,358 tokens, 14 s |
 | `agent-deontic-extractor` | DSPy 3.3 ReAct | agent route | 72 h and tenant keys read from a DPA clause; 4 calls, 12,085 tokens, 12 s |
-| `agent-polyglot-ast-mapper` | Hermes-style tool calls to Ollama | local, `LEXCOMPILER_HERMES_MODEL` (default `qwen2.5-coder:7b`) | Finished on `qwen2.5-coder:0.5b`, but the answer described the tool instead of the scan. 0.5B is too small; the 7B model is not installed |
+| `agent-polyglot-ast-mapper` | Hermes-style tool calls to Ollama | local, `LEXCOMPILER_HERMES_MODEL` (default `llama3.2`, 3B) | On `llama3.2`: the scan's construct types in 16 s on a 6 GB laptop GPU (the answer schema is enforced on the correction turn). 0.5B was too small; 7B doesn't fit a 6 GB GPU with the desktop running |
 | `agent-contextual-graph-rag` | LangGraph 1.2 | agent route for the answer (`--no-model`: the retriever's answer) | Named `schema/postgres_pii.sql:4` (720 h); 1 call, 979 tokens, 6 s |
 | `agent-z3-formal-critic` | Pydantic-AI 2.31 | agent route | 4 clauses UNSAT with cores and locations, matching the tool; 2 calls, 3,008 tokens, 6 s |
 | `agent-remediation-pr-enforcer` | OpenAI Agents SDK 0.20 (Swarm's successor) | agent route | Patch for 5 files, post-patch Z3 SAT_COMPLIANT, reviewer handoff; 3 calls, 7,200 tokens, 8 s |

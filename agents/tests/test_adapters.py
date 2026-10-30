@@ -59,6 +59,39 @@ def test_hermes_loop_against_a_stub_ollama(stub):
         server.shutdown()
 
 
+def test_hermes_correction_turn_forces_the_answer_schema(stub):
+    """A small model that wraps its answer in a made-up tool call gets one turn with no tools and the schema as Ollama's format."""
+    replies = [
+        {"content": '<tool_call>{"name": "scan_polyglot_repository_ast", "arguments": {}}</tool_call>'},
+        {"content": '{"name": "format_agent_output", "parameters": {"output": "5 files"}}'},
+        {"content": json.dumps({"summary": "5 files scanned.", "keyFacts": ["api/fastapi_intake.py:31"], "confidence": 0.8})},
+    ]
+    requests = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            requests.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
+            body = json.dumps({"message": replies.pop(0)}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        client = stub("lex-polyglot-ast-mcp", {"scan_polyglot_repository_ast": {"filesScanned": 5}})
+        out = hermes_ast.run(client, base=f"http://127.0.0.1:{server.server_port}")
+        assert out.keyFacts == ["api/fastapi_intake.py:31"]
+        assert requests[0]["model"] == "llama3.2" and "tools" in requests[0] and "format" not in requests[0]
+        assert "tools" not in requests[2] and requests[2]["format"]["required"] == ["summary", "confidence"]
+    finally:
+        server.shutdown()
+
+
 def test_openai_agents_returns_typed_output_when_the_model_skips_the_handoff(stub):
     # Regression: a model that answers directly (no handoff to the reviewer) returned a bare string.
     from agents import OpenAIChatCompletionsModel, set_tracing_disabled

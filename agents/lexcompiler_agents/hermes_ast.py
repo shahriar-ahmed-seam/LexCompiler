@@ -1,4 +1,8 @@
-"""agent-polyglot-ast-mapper: Hermes-style function calling on a local Ollama model (Qwen2.5-Coder)."""
+"""agent-polyglot-ast-mapper: Hermes-style function calling on a local Ollama model.
+
+The default is llama3.2 (3B): it fits a 6 GB laptop GPU with room to spare. A 7B model needs about 4.7 GB
+of GPU memory and spills into system RAM on such a machine. Set LEXCOMPILER_HERMES_MODEL to change it.
+"""
 from __future__ import annotations
 
 import json
@@ -36,9 +40,18 @@ def compact_scan(result: dict) -> str:
 SHAPERS = {"scan_polyglot_repository_ast": compact_scan}
 
 
-def _chat(base: str, model: str, messages: list[dict], tools: list[dict]) -> dict:
+DEFAULT_MODEL = "llama3.2"
+
+
+def _chat(base: str, model: str, messages: list[dict], tools: list[dict], fmt: dict | None = None) -> dict:
     # num_predict caps each answer: small models can otherwise generate until the request times out.
-    body = json.dumps({"model": model, "messages": messages, "tools": tools, "stream": False, "options": {"temperature": 0, "num_ctx": 8192, "num_predict": 800}}).encode()
+    payload = {"model": model, "messages": messages, "stream": False, "options": {"temperature": 0, "num_ctx": 8192, "num_predict": 800}}
+    if tools:
+        payload["tools"] = tools
+    if fmt:
+        # Ollama's structured output: the answer is constrained to this JSON schema.
+        payload["format"] = fmt
+    body = json.dumps(payload).encode()
     req = urllib.request.Request(f"{base.rstrip('/')}/api/chat", data=body, headers={"Content-Type": "application/json"}, method="POST")
     with urllib.request.urlopen(req, timeout=300) as res:
         return json.loads(res.read())["message"]
@@ -55,7 +68,7 @@ def parse_tool_calls(message: dict) -> list[tuple[str, dict]]:
 
 def run(client: McpClient | None = None, model: str | None = None, base: str | None = None, max_turns: int = 4, context: str = "") -> AgentOutput:
     client = client or McpClient("lex-polyglot-ast-mcp")
-    model = model or os.environ.get("LEXCOMPILER_HERMES_MODEL", "qwen2.5-coder:7b")
+    model = model or os.environ.get("LEXCOMPILER_HERMES_MODEL", DEFAULT_MODEL)
     base = base or os.environ.get("OLLAMA_HOST", "http://localhost:11434")
     tools = [{"type": "function", "function": {"name": t.name, "description": t.description, "parameters": t.input_schema}} for t in client.list_tools()]
     messages = [
@@ -65,7 +78,9 @@ def run(client: McpClient | None = None, model: str | None = None, base: str | N
     ]
     corrected = False
     for _ in range(max_turns):
-        msg = _chat(base, model, messages, tools)
+        # The correction turn offers no tools and constrains the answer to the schema: small models
+        # otherwise wrap their answer in a made-up tool call.
+        msg = _chat(base, model, messages, [] if corrected else tools, AgentOutput.model_json_schema() if corrected else None)
         calls = parse_tool_calls(msg)
         messages.append({"role": "assistant", "content": msg.get("content") or "", **({"tool_calls": msg["tool_calls"]} if msg.get("tool_calls") else {})})
         if not calls:
