@@ -18,6 +18,7 @@ import type {
   McpServerDescriptor,
   McpToolInvocationResult,
   RuleCategory,
+  TargetRepoFile,
 } from '../../shared/types.js';
 
 type McpServerSpec = Omit<McpServerDescriptor, 'toolsCount' | 'resourcesCount' | 'promptsCount'>;
@@ -259,12 +260,16 @@ function validateArguments(schema: Record<string, unknown>, args: Record<string,
   }
 }
 
-/** Runs one tool; throws McpError(-32602) for unknown servers, tools, or invalid arguments. */
+/**
+ * Runs one tool; throws McpError(-32602) for unknown servers, tools, or invalid arguments.
+ * `files` is the repository the tools read (default: the bundled target repository).
+ */
 export async function executeMcpTool(
   serverId: string,
   toolName: string,
   args: Record<string, unknown>,
-  clauses: LegalClause[]
+  clauses: LegalClause[],
+  files?: TargetRepoFile[]
 ): Promise<Record<string, unknown>> {
   const server = getMcpServersCatalog().find((s) => s.id === serverId);
   if (!server) throw new McpError(-32602, `Unknown MCP server "${serverId}"`);
@@ -272,7 +277,7 @@ export async function executeMcpTool(
   if (!tool) throw new McpError(-32602, `Unknown tool "${toolName}" on ${serverId}`);
   validateArguments(tool.inputSchema, args);
 
-  const repo = () => analyzeFullRepositoryAsync(readTargetRepoFiles());
+  const repo = () => analyzeFullRepositoryAsync(files ?? readTargetRepoFiles());
   switch (toolName) {
     case 'fetch_live_regulatory_feed': {
       const feed = await fetchLiveRegulatoryFeed();
@@ -369,7 +374,9 @@ async function readResource(serverId: string, uri: string, clauses: LegalClause[
 export async function handleMcpMessage(
   serverId: string,
   message: unknown,
-  clauses: LegalClause[]
+  clauses: LegalClause[],
+  /** The repository tools/call reads (default: the bundled target repository). */
+  files?: TargetRepoFile[]
 ): Promise<JsonRpcResponse | null> {
   const msg = message as { jsonrpc?: unknown; id?: unknown; method?: unknown; params?: Record<string, unknown> };
   const hasId = msg && typeof msg === 'object' && 'id' in msg && (typeof msg.id === 'string' || typeof msg.id === 'number');
@@ -410,7 +417,7 @@ export async function handleMcpMessage(
         if (typeof params.name !== 'string') throw new McpError(-32602, 'params.name must be a string');
         const args = (params.arguments as Record<string, unknown> | undefined) || {};
         try {
-          const output = await executeMcpTool(serverId, params.name, args, clauses);
+          const output = await executeMcpTool(serverId, params.name, args, clauses, files);
           return {
             jsonrpc: '2.0',
             id,

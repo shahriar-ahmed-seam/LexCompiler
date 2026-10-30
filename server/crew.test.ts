@@ -1,7 +1,7 @@
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { CREW, CrewRunStore, importedRun, runCrew, validateImportedRun, type CallTool } from './agents/crew.js';
+import { CREW, CrewRunStore, importedRun, runCrew, scopedCallTool, validateImportedRun, type CallTool } from './agents/crew.js';
 import type { LlmConfig } from './agents/llmClient.js';
 import { getInitialClauses } from './compiler/legalCompiler.js';
 import { openDatabase } from './db/index.js';
@@ -56,13 +56,19 @@ describe('agent crew', () => {
     expect(run.gate).toBe('PATCH_VERIFIED');
     expect(run.totalTokens).toBe(0);
     expect(run.steps.every((s) => s.execution === 'DIRECT_TOOL_CALL')).toBe(true);
-  });
+  }, 60_000);
 
   it('checks every active rule when no feed item matches one', async () => {
     const t = tools({ fetch_live_regulatory_feed: () => ({ items: [{ id: 'X', title: 'Grazing fees', excerpt: 'Fees for grazing permits.' }] }) });
     const run = await runCrew(clauses, { callTool: t.call });
     expect(run.steps[0].handoff.clauseIds).toEqual(clauses.map((c) => c.id));
     expect(run.steps[0].handoff.reason).toMatch(/checking all active rules/);
+  }, 60_000);
+
+  it('checks every active rule when asked, even with a matching feed item', async () => {
+    const run = await runCrew(clauses, { callTool: tools().call, allRules: true });
+    expect(run.steps[0].handoff).toMatchObject({ clauseIds: clauses.map((c) => c.id), reason: 'every active rule was asked for' });
+    expect(run.steps[0].summary).toMatch(/1 active rule\(s\)\. Checking all active rules\.$/);
   }, 60_000);
 
   it('skips remediation when Z3 refutes nothing', async () => {
@@ -126,16 +132,67 @@ describe('agent crew', () => {
     });
   });
 
+  describe('rule path scopes', () => {
+    const files = ['api/intake.py', 'workers/cache.py', 'workers/purge.py', 'schema/pii.sql'].map((path) => ({ path, language: 'python', content: '' }) as never);
+    const [r1, r2] = [{ ...retention, id: 'R-1' }, { ...retention, id: 'R-2' }];
+    const globs = new Map([['R-2', ['workers/**']]]);
+    function base(outputs: Record<string, (clauseIds: string[]) => Record<string, unknown>>) {
+      const calls: Array<{ tool: string; clauseIds: string[]; paths: string[] }> = [];
+      const call: CallTool = async (_server, tool, _args, cls, fs) => {
+        calls.push({ tool, clauseIds: cls.map((c) => c.id), paths: (fs ?? []).map((x) => x.path) });
+        return outputs[tool](cls.map((c) => c.id));
+      };
+      return { call, calls };
+    }
+
+    it('runs each group of rules on its own paths and merges the results', async () => {
+      const b = base({
+        scan_polyglot_repository_ast: (ids) => ({ filesScanned: ids.includes('R-2') ? 2 : 4, structuralQueryMatches: Object.fromEntries(ids.map((id) => [id, [{ filePath: 'x', line: 1 }]])) }),
+        prove_repository_compliance_z3: (ids) => ({
+          verdicts: ids.map((clauseId) => ({ clauseId, status: 'UNSAT_VIOLATION', unsatCore: [], offendingLocations: [{ filePath: 'workers/cache.py', line: 3 }, { filePath: 'api/intake.py', line: 9 }] })),
+        }),
+      });
+      const call = scopedCallTool(b.call, globs);
+      const scan = await call('s', 'scan_polyglot_repository_ast', {}, [r1, r2], files);
+      expect(b.calls).toEqual([
+        { tool: 'scan_polyglot_repository_ast', clauseIds: ['R-1'], paths: files.map((x: { path: string }) => x.path) },
+        { tool: 'scan_polyglot_repository_ast', clauseIds: ['R-2'], paths: ['workers/cache.py', 'workers/purge.py'] },
+      ]);
+      expect(Object.keys(scan.structuralQueryMatches as object)).toEqual(['R-1', 'R-2']);
+      expect(scan.filesScanned).toBe(6);
+
+      const proof = await call('s', 'prove_repository_compliance_z3', {}, [r1, r2], files);
+      const verdicts = proof.verdicts as Array<{ clauseId: string; offendingLocations: Array<{ filePath: string }> }>;
+      // Outside its paths a scoped rule reports nothing.
+      expect(verdicts.find((v) => v.clauseId === 'R-1')!.offendingLocations.map((l) => l.filePath)).toEqual(['workers/cache.py', 'api/intake.py']);
+      expect(verdicts.find((v) => v.clauseId === 'R-2')!.offendingLocations.map((l) => l.filePath)).toEqual(['workers/cache.py']);
+    });
+
+    it('blocks a patch when two groups patch the same file', async () => {
+      const b = base({ synthesize_and_verify_remediation_pr: () => ({ status: 'READY_TO_MERGE', postPatchZ3Status: 'SAT_COMPLIANT', filePatches: [{ filePath: 'workers/cache.py' }] }) });
+      const out = await scopedCallTool(b.call, globs)('s', 'synthesize_and_verify_remediation_pr', {}, [r1, r2], files);
+      expect(out).toMatchObject({ status: 'BLOCKED_UNRESOLVED', postPatchZ3Status: 'UNSAT_VIOLATION', validationErrors: [expect.stringMatching(/workers\/cache\.py/)] });
+    });
+
+    it('makes one call when every rule applies everywhere, and leaves other tools alone', async () => {
+      const b = base({ scan_polyglot_repository_ast: () => ({}), fetch_live_regulatory_feed: () => ({ items: [] }) });
+      const call = scopedCallTool(b.call, new Map());
+      await call('s', 'scan_polyglot_repository_ast', {}, [r1, r2], files);
+      await scopedCallTool(b.call, globs)('s', 'fetch_live_regulatory_feed', {}, [r1, r2], files);
+      expect(b.calls.map((c) => c.clauseIds)).toEqual([['R-1', 'R-2'], ['R-1', 'R-2']]);
+    });
+  });
+
   it('stores runs and lists them newest first', async () => {
     const db = openDatabase(':memory:');
     const store = new CrewRunStore(db);
     const run = await runCrew(clauses, { callTool: tools().call });
     store.save(run);
     store.save({ ...run, id: 'later', startedAt: new Date(Date.now() + 1000).toISOString() });
-    expect(store.get(run.id)?.steps).toHaveLength(6);
-    expect(store.list().map((r) => r.id)).toEqual(['later', run.id]);
-    expect(store.list()[0].stepStatuses).toEqual(run.steps.map((s) => s.status));
-    expect(store.get('nope')).toBeNull();
+    expect(store.get(run.id, null)?.steps).toHaveLength(6);
+    expect(store.list(null).map((r) => r.id)).toEqual(['later', run.id]);
+    expect(store.list(null)[0].stepStatuses).toEqual(run.steps.map((s) => s.status));
+    expect(store.get('nope', null)).toBeNull();
   });
 
   it('stores a Python crew run with each agent\u2019s tokens from the call log', () => {
