@@ -156,7 +156,7 @@ LEXCOMPILER_HERMES_MODEL=qwen2.5-coder:0.5b ../.venv-agents/bin/python -m lexcom
 - **The crew** doesn't pass results between agents yet. Each run is independent and reads the bundled fixture.
 
 **Next, in order:**
-1. **Chain the crew.** One command (and a server endpoint) runs horizon scanner → deontic extractor → AST mapper → graph RAG → Z3 critic → remediation, passing each output to the next. Store the run (steps, tool calls, tokens, cost) and show it in the engine console and the product.
+1. ~~**Chain the crew.**~~ Done: `server/agents/crew.ts` (`POST /api/agents/crew/runs`, stored in `agent_crew_runs`, migration 5) and `python -m lexcompiler_agents crew` (stored through `/api/agents/crew/runs/import`, with each agent's tokens from `ai_calls`). Handoffs come from tool results only. Guide 5.7 has the table. Still to do: show the runs in the engine console and the product screens.
 2. **Hermes on a real model.** Pull `qwen2.5-coder:7b` (about 4.7 GB). This machine has 15 GB of RAM with little free while Chrome and Kiro run, so try `qwen2.5-coder:3b` if the 7B is too slow. Then re-run agent 3.
 3. **Remediation opens a real PR.** Give the GitHub App `contents: write` and `pull_requests: write`, then open the verified patch as a pull request on `finhealth-core-platform`, but only when post-patch Z3 is SAT_COMPLIANT (the `AGENTS.md` §3 gate).
 4. **Point agents at real repositories.** The six MCP servers read the bundled fixture and the demo clauses. Let a run take a workspace and repository, so the crew works on the repository and rules the judges see.

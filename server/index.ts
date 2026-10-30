@@ -48,6 +48,7 @@ import {
   inferRuleCategoryFromProse,
 } from './compiler/legalCompiler.js';
 import { getMcpServersCatalog, handleMcpMessage, invokeMcpTool } from './mcp/mcpSuite.js';
+import { CrewRunStore, importedRun, runCrew, validateImportedRun } from './agents/crew.js';
 import { loadActiveClauseState, saveActiveClauseState } from './state.js';
 import {
   compressLegalProseCaveman,
@@ -414,6 +415,59 @@ app.post('/api/agents/llm/v1/chat/completions', async (req, res) => {
     }
     sendError(res, err);
   }
+});
+
+/**
+ * The six agents chained (server/agents/crew.ts). Without models every step is a direct tool
+ * call; { "useModels": true } lets each agent's configured model report too, which spends the
+ * agents' daily budget, so only the operator may ask for it.
+ */
+const crewRuns = new CrewRunStore(getDb());
+
+app.post('/api/agents/crew/runs', async (req, res) => {
+  const principal = res.locals.principal as { sub?: string; globalRole?: string } | undefined;
+  const useModels = req.body?.useModels === true;
+  if (useModels && principal?.globalRole !== 'admin') {
+    res.status(403).json({ error: 'Running the crew with models is for the server operator (LEXCOMPILER_API_TOKEN).' });
+    return;
+  }
+  try {
+    const run = await runCrew(activeClauses, { useModels, triggeredBy: principal?.sub ?? null });
+    crewRuns.save(run);
+    res.status(201).json(run);
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+/** A run of the Python crew (python -m lexcompiler_agents crew), stored as it reports it. Operator only. */
+app.post('/api/agents/crew/runs/import', (req, res) => {
+  const principal = res.locals.principal as { sub?: string; globalRole?: string } | undefined;
+  if (principal?.globalRole !== 'admin') {
+    res.status(403).json({ error: 'Storing a Python crew run is for the server operator (LEXCOMPILER_API_TOKEN).' });
+    return;
+  }
+  const problem = validateImportedRun(req.body);
+  if (problem) {
+    res.status(400).json({ error: problem });
+    return;
+  }
+  const run = importedRun(getDb(), req.body as Record<string, unknown>, principal.sub ?? null);
+  crewRuns.save(run);
+  res.status(201).json({ id: run.id });
+});
+
+app.get('/api/agents/crew/runs', (_req, res) => {
+  res.json({ runs: crewRuns.list() });
+});
+
+app.get('/api/agents/crew/runs/:id', (req, res) => {
+  const run = crewRuns.get(req.params.id);
+  if (!run) {
+    res.status(404).json({ error: 'No such crew run.' });
+    return;
+  }
+  res.json(run);
 });
 
 /** UI helper: runs tools/call and returns the full request/response trace. */

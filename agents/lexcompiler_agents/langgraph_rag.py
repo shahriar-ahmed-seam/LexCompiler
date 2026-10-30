@@ -6,11 +6,13 @@ from typing import Callable, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
-from .mcp_client import AgentOutput, McpClient
+from .mcp_client import AgentOutput, McpClient, with_context
 
 
 class RagState(TypedDict, total=False):
     query: str
+    #: What the previous agent in the crew reported; steers the answer, not the retrieval.
+    context: str
     attempts: int
     report: dict
     answer: AgentOutput
@@ -34,7 +36,7 @@ def build_graph(client: McpClient, llm_answer: Callable[[str, dict], AgentOutput
         r = state["report"]
         if llm_answer:
             try:
-                return {"answer": llm_answer(state["query"], r)}
+                return {"answer": llm_answer(with_context(state["query"], state.get("context", "")), r)}
             except Exception as err:  # the model is optional: fall back to the retriever's answer, and say so
                 print(f"[agent-contextual-graph-rag] model answer failed, using the retriever's answer: {err}", file=sys.stderr)
         chunks = r.get("retrievedChunks", [])
@@ -57,5 +59,5 @@ def build_graph(client: McpClient, llm_answer: Callable[[str, dict], AgentOutput
     return g.compile()
 
 
-def run(query: str, client: McpClient | None = None, llm_answer=None) -> AgentOutput:
-    return build_graph(client or McpClient("lex-hybrid-rag-mcp"), llm_answer).invoke({"query": query})["answer"]
+def run(query: str, client: McpClient | None = None, llm_answer=None, context: str = "") -> AgentOutput:
+    return build_graph(client or McpClient("lex-hybrid-rag-mcp"), llm_answer).invoke({"query": query, "context": context})["answer"]

@@ -5,7 +5,7 @@ from pydantic_ai import Agent, Tool
 from pydantic_ai.usage import UsageLimits
 
 from .llm import route
-from .mcp_client import AgentOutput, McpClient
+from .mcp_client import AgentOutput, McpClient, with_context
 
 AGENT_ID = "agent-z3-formal-critic"
 
@@ -43,6 +43,6 @@ def build_agent(model, client: McpClient) -> Agent:
     )
 
 
-def run(model=None, client: McpClient | None = None, task: str = "Prove the repository against every active clause.", request_limit: int = 6) -> AgentOutput:
+def run(model=None, client: McpClient | None = None, task: str = "Prove the repository against every active clause.", request_limit: int = 6, context: str = "") -> AgentOutput:
     agent = build_agent(model or default_model(), client or McpClient("lex-z3-prover-mcp"))
-    return agent.run_sync(task, usage_limits=UsageLimits(request_limit=request_limit)).output
+    return agent.run_sync(with_context(task, context), usage_limits=UsageLimits(request_limit=request_limit)).output

@@ -15,7 +15,7 @@ from crewai.tools import BaseTool  # noqa: E402
 from pydantic import BaseModel, Field, create_model  # noqa: E402
 
 from .llm import extract_json, route  # noqa: E402
-from .mcp_client import AgentOutput, McpClient, McpTool  # noqa: E402
+from .mcp_client import AgentOutput, McpClient, McpTool, with_context  # noqa: E402
 
 AGENT_ID = "agent-horizon-scanner"
 _JSON_TYPES: dict[str, Any] = {"string": str, "number": float, "integer": int, "boolean": bool, "array": list, "object": dict}
@@ -90,7 +90,7 @@ def make_llm(model: str | None = None) -> LLM:
     return LLM(model=r.agent_id, custom_openai=True, base_url=r.base_url, api_key=r.api_key, default_headers=r.headers, temperature=0, max_tokens=1500)
 
 
-def run(client: McpClient | None = None, model: str | None = None) -> AgentOutput:
+def run(client: McpClient | None = None, model: str | None = None, context: str = "") -> AgentOutput:
     client = client or McpClient("lex-statute-ingest-mcp")
     scanner = Agent(
         role="Regulatory horizon scanner",
@@ -103,10 +103,11 @@ def run(client: McpClient | None = None, model: str | None = None) -> AgentOutpu
         verbose=False,
     )
     task = Task(
-        description=(
+        description=with_context(
             "Call fetch_live_regulatory_feed once with jurisdiction ALL. For each item it returns, name the obligation it concerns "
             "(data retention or erasure, logging of personal data, human review of AI decisions, data residency, encryption, or none). "
-            "Use parse_dpa_contract_clause for at most two items whose excerpt is unclear. Say when an item is marked illustrative."
+            "Use parse_dpa_contract_clause for at most two items whose excerpt is unclear. Say when an item is marked illustrative.",
+            context,
         ),
         expected_output=(
             'Only a JSON object: {"summary": two sentences on what changed, "keyFacts": one short entry per item with its source, '

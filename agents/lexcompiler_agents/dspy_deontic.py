@@ -4,7 +4,7 @@ from __future__ import annotations
 import dspy
 
 from .llm import route
-from .mcp_client import AgentOutput, McpClient
+from .mcp_client import AgentOutput, McpClient, with_context
 
 AGENT_ID = "agent-deontic-extractor"
 
@@ -26,7 +26,7 @@ def make_lm(model: str | None = None) -> dspy.LM:
     return dspy.LM(f"openai/{r.agent_id}", api_base=r.base_url, api_key=r.api_key, extra_headers=r.headers, temperature=0, max_tokens=1500, cache=False, num_retries=1)
 
 
-def run(clause: str, client: McpClient | None = None, model: str | None = None, max_iters: int = 3) -> AgentOutput:
+def run(clause: str, client: McpClient | None = None, model: str | None = None, max_iters: int = 3, context: str = "") -> AgentOutput:
     client = client or McpClient("lex-deontic-compiler-mcp")
 
     def make(tool):
@@ -39,4 +39,4 @@ def run(clause: str, client: McpClient | None = None, model: str | None = None, 
 
     program = dspy.ReAct(DeonticExtraction, tools=[make(t) for t in client.list_tools()], max_iters=max_iters)
     with dspy.context(lm=make_lm(model)):
-        return program(clause=clause).result
+        return program(clause=with_context(clause, context)).result

@@ -1014,7 +1014,21 @@ cd agents && ../.venv-agents/bin/python -m lexcompiler_agents agent-z3-formal-cr
 
 `--model` still takes a framework model string (for example `gemini/gemini-2.5-flash` for CrewAI or `openai:gpt-4o` for Pydantic-AI), with that provider's key in the agents' environment. CrewAI telemetry and its first-run trace prompt are off, and so is the OpenAI Agents SDK's trace upload (`LEXCOMPILER_AGENTS_TRACING=1` turns that on).
 
-The six agents still run one at a time, each on the bundled fixture. They don't pass results to each other yet.
+**The crew, chained.** The six agents can also run as one chain, each receiving what the previous one found (`server/agents/crew.ts`):
+
+| Step | Agent | Receives | Hands on |
+|---|---|---|---|
+| 1 | Horizon scanner | The active rules | Feed items whose category (from their wording) matches a rule, and those rules' ids. With no match, every active rule |
+| 2 | Deontic extractor | Rule ids | Each rule compiled from its text (formula, SMT-LIB2, Rego). Steps 3–6 check these compiled rules |
+| 3 | AST mapper | Compiled rules | Where each rule's pattern matches (`file:line`) |
+| 4 | Graph RAG | Locations | The sources retrieved for a query built from the rules' formulas and the mapper's locations |
+| 5 | Z3 critic | Sources | The rules Z3 refutes, with unsat cores and locations |
+| 6 | Remediation | Refuted rules | A patch for those rules only, and whether post-patch Z3 is SAT_COMPLIANT. Skipped when nothing is refuted |
+
+The run's gate is NOTHING_TO_FIX, PATCH_VERIFIED, PATCH_BLOCKED or INCOMPLETE (a step failed; the chain stops there). What passes between agents comes from tool results only, never from model text, so a model's mistake can't travel down the chain.
+
+- **On the server:** `POST /api/agents/crew/runs` runs it. Every step is a direct tool call and costs nothing; `{"useModels": true}` (operator only) also lets each agent's model read what it received and report, within the agents' daily budget. `GET /api/agents/crew/runs` and `/runs/<id>` read stored runs (migration 5, `agent_crew_runs`).
+- **In Python:** `python -m lexcompiler_agents crew` runs the six framework agents in order, each given the previous agent's report as context. The gate comes from the remediation tool's own result. The run is sent to `POST /api/agents/crew/runs/import` (operator only), which fills in each agent's tokens from `ai_calls`. `--no-store` only prints it.
 
 **In the product,** keep two agents that do real work:
 - **Regulation watch** (Phase 6) reads new Federal Register and EUR-Lex items, summarizes them, finds the rules they may affect with RAG, and puts drafts in Legal's inbox. It has no tool that approves.

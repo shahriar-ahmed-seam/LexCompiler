@@ -7,7 +7,7 @@ import re
 import urllib.request
 
 from .llm import extract_json
-from .mcp_client import AgentOutput, McpClient
+from .mcp_client import AgentOutput, McpClient, with_context
 
 TOOL_CALL = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.S)
 
@@ -53,7 +53,7 @@ def parse_tool_calls(message: dict) -> list[tuple[str, dict]]:
     return calls
 
 
-def run(client: McpClient | None = None, model: str | None = None, base: str | None = None, max_turns: int = 4) -> AgentOutput:
+def run(client: McpClient | None = None, model: str | None = None, base: str | None = None, max_turns: int = 4, context: str = "") -> AgentOutput:
     client = client or McpClient("lex-polyglot-ast-mcp")
     model = model or os.environ.get("LEXCOMPILER_HERMES_MODEL", "qwen2.5-coder:7b")
     base = base or os.environ.get("OLLAMA_HOST", "http://localhost:11434")
@@ -61,7 +61,7 @@ def run(client: McpClient | None = None, model: str | None = None, base: str | N
     messages = [
         {"role": "system", "content": "You map polyglot repositories to compliance constructs. Call a tool with <tool_call>{\"name\": ..., \"arguments\": {...}}</tool_call>. "
          f"When done, answer with JSON: {json.dumps(AgentOutput.model_json_schema())}"},
-        {"role": "user", "content": "Scan the repository and list the compliance-relevant constructs."},
+        {"role": "user", "content": with_context("Scan the repository and list the compliance-relevant constructs.", context)},
     ]
     corrected = False
     for _ in range(max_turns):
