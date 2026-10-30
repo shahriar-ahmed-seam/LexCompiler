@@ -86,7 +86,7 @@ export function ExceptionsPage() {
         <Spinner />
       ) : list.length === 0 ? (
         <Card>
-          <EmptyState icon={<Inbox className="size-5" />} title={tab === 'waiting' ? 'No requests waiting' : tab === 'active' ? 'No exceptions in force' : 'Nothing closed yet'} description={tab === 'waiting' ? 'When a pull request breaks a rule and can’t be fixed yet, the engineer asks here, and you decide.' : undefined} />
+          <EmptyState icon={<Inbox className="size-5" />} title={tab === 'waiting' ? 'No requests waiting' : tab === 'active' ? 'No exceptions in force' : 'Nothing closed yet'} description={tab === 'waiting' ? `When a pull request breaks a rule and can’t be fixed yet, the engineer asks here, and ${legal ? 'you decide' : 'Legal decides'}.` : undefined} />
         </Card>
       ) : (
         <div className="space-y-3">
