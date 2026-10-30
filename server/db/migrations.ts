@@ -389,4 +389,14 @@ CREATE TABLE agent_crew_runs (
 CREATE INDEX agent_crew_runs_started ON agent_crew_runs(started_at);
 `,
   },
+  {
+    id: 6,
+    name: 'Agent crew runs on workspace repositories',
+    sql: `
+-- Set for runs on a workspace's repository; those are listed only in that workspace.
+ALTER TABLE agent_crew_runs ADD COLUMN workspace_id TEXT REFERENCES workspaces(id) ON DELETE CASCADE;
+ALTER TABLE agent_crew_runs ADD COLUMN repo_id TEXT;
+CREATE INDEX agent_crew_runs_workspace ON agent_crew_runs(workspace_id, started_at);
+`,
+  },
 ];

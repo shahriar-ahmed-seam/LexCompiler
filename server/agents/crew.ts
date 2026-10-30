@@ -5,7 +5,8 @@ import { runAgent } from './agentRuntime.js';
 import { llmConfigFor, type LlmConfig } from './llmClient.js';
 import { executeMcpTool } from '../mcp/mcpSuite.js';
 import { inferRuleCategoryWithEvidence } from '../compiler/legalCompiler.js';
-import type { LegalClause, LiveRegulatoryFeedItem } from '../../shared/types.js';
+import { globMatch } from '../product/scanner.js';
+import type { LegalClause, LiveRegulatoryFeedItem, TargetRepoFile } from '../../shared/types.js';
 
 /**
  * The agent crew of AGENTS.md §2, chained: each agent receives what the previous one found.
@@ -18,7 +19,22 @@ import type { LegalClause, LiveRegulatoryFeedItem } from '../../shared/types.js'
  * direct tool call and costs nothing.
  */
 
-export type CallTool = (serverId: string, tool: string, args: Record<string, unknown>, clauses: LegalClause[]) => Promise<Record<string, unknown>>;
+export type CallTool = (serverId: string, tool: string, args: Record<string, unknown>, clauses: LegalClause[], files?: TargetRepoFile[]) => Promise<Record<string, unknown>>;
+
+/** The workspace repository a run checked (absent for runs on the bundled target repository). */
+export interface CrewTarget {
+  workspaceId: string;
+  repoId: string;
+  repoFullName: string;
+  commitSha: string;
+}
+
+/** A pull request opened for the run's verified patch. */
+export interface CrewPullRequest {
+  created: boolean;
+  prNumber: number;
+  url: string;
+}
 
 export interface CrewStep {
   stepNumber: number;
@@ -63,6 +79,7 @@ export interface CrewRun {
   totalTokens: number;
   latencyMs: number;
   triggeredBy: string | null;
+  target?: CrewTarget;
   steps: CrewStep[];
 }
 
@@ -84,6 +101,73 @@ export const CREW: Agent[] = [
 ];
 
 const MAX_FEED_ITEMS = 5;
+
+/** Tools that read the repository; with path scopes they run once per group of rules sharing the same paths. */
+const REPOSITORY_TOOLS = new Set(['scan_polyglot_repository_ast', 'hybrid_contextual_graph_rag_query', 'prove_repository_compliance_z3', 'synthesize_and_verify_remediation_pr']);
+
+/**
+ * Rule path scopes (product guide, Phase 6), as scanFilesScoped applies them: rules are grouped by
+ * their globs, and each group's tools read only the files those globs match. The groups' results
+ * are merged into one, so the rest of the crew doesn't change.
+ */
+export function scopedCallTool(base: CallTool, globsByRule: Map<string, string[]>): CallTool {
+  return async (server, tool, args, clauses, files) => {
+    if (!REPOSITORY_TOOLS.has(tool) || !files) return base(server, tool, args, clauses, files);
+    const groups = new Map<string, { globs: string[]; clauses: LegalClause[] }>();
+    for (const c of clauses) {
+      const g = [...new Set(globsByRule.get(c.id) ?? ['**'])].sort();
+      const group = groups.get(g.join('\n')) ?? { globs: g, clauses: [] };
+      group.clauses.push(c);
+      groups.set(g.join('\n'), group);
+    }
+    if (groups.size === 1 && groups.has('**')) return base(server, tool, args, clauses, files);
+    const inScope = (globs: string[], path: string) => globs.includes('**') || globs.some((g) => globMatch(g, path));
+    const results = await Promise.all(
+      [...groups.values()].map(async (g) => ({ globs: g.globs, out: await base(server, tool, args, g.clauses, files.filter((f) => inScope(g.globs, f.path))) }))
+    );
+    return mergeScoped(tool, results, inScope);
+  };
+}
+
+function mergeScoped(tool: string, results: Array<{ globs: string[]; out: Record<string, unknown> }>, inScope: (globs: string[], path: string) => boolean): Record<string, unknown> {
+  const outs = results.map((r) => r.out);
+  switch (tool) {
+    case 'scan_polyglot_repository_ast':
+      return {
+        ...outs[0],
+        structuralQueryMatches: Object.assign({}, ...outs.map((o) => o.structuralQueryMatches || {})),
+        filesScanned: outs.reduce((n, o) => n + Number(o.filesScanned || 0), 0),
+      };
+    case 'hybrid_contextual_graph_rag_query':
+      return { ...outs[0], retrievedChunks: outs.flatMap((o) => (o.retrievedChunks as unknown[] | undefined) || []) };
+    case 'prove_repository_compliance_z3':
+      return {
+        ...outs[0],
+        verdicts: results.flatMap(({ globs, out }) =>
+          ((out.verdicts as Array<{ offendingLocations: Array<{ filePath: string }> }> | undefined) || []).map((v) => ({
+            ...v,
+            offendingLocations: v.offendingLocations.filter((l) => inScope(globs, l.filePath)),
+          }))
+        ),
+      };
+    default: {
+      // Remediation: one patch per group; two groups patching the same file can't be combined safely.
+      const patched = outs.filter((o) => Array.isArray(o.filePatches));
+      if (patched.length === 0) return outs[0];
+      const filePatches = patched.flatMap((o) => o.filePatches as Array<{ filePath: string }>);
+      const paths = filePatches.map((p) => p.filePath);
+      const overlap = paths.filter((p, i) => paths.indexOf(p) !== i);
+      const proven = patched.every((o) => o.postPatchZ3Status === 'SAT_COMPLIANT') && overlap.length === 0;
+      return {
+        ...patched[0],
+        filePatches,
+        postPatchZ3Status: proven ? 'SAT_COMPLIANT' : 'UNSAT_VIOLATION',
+        status: proven ? patched[0].status : 'BLOCKED_UNRESOLVED',
+        ...(overlap.length ? { validationErrors: [`rules with different paths both patch ${[...new Set(overlap)].join(', ')}`] } : {}),
+      };
+    }
+  }
+}
 const MAX_LOCATIONS = 10;
 
 interface StepWork {
@@ -95,10 +179,27 @@ interface StepWork {
 
 export async function runCrew(
   clauses: LegalClause[],
-  opts: { useModels?: boolean; callTool?: CallTool; triggeredBy?: string | null; llmFor?: (agentId: string) => LlmConfig | null } = {}
+  opts: {
+    useModels?: boolean;
+    callTool?: CallTool;
+    triggeredBy?: string | null;
+    llmFor?: (agentId: string) => LlmConfig | null;
+    /** The repository the tools read (default: the bundled target repository). */
+    files?: TargetRepoFile[];
+    /** Path globs per rule id (a rule scoped to counterparties); rules without an entry apply everywhere. */
+    globs?: Map<string, string[]>;
+    target?: CrewTarget;
+    /** Opens a pull request once the patch passes the Z3 gate (the product's fix-PR path, which proves every rule again). */
+    openPullRequest?: () => Promise<CrewPullRequest>;
+    /** Check every active rule, not only those the feed touches (the scanner still reports its matches). */
+    allRules?: boolean;
+  } = {}
 ): Promise<CrewRun> {
   const useModels = opts.useModels ?? false;
-  const callTool = opts.callTool ?? executeMcpTool;
+  const files = opts.files;
+  const base = opts.callTool ?? executeMcpTool;
+  const scoped = opts.globs ? scopedCallTool(base, opts.globs) : base;
+  const callTool: CallTool = (server, tool, args, cls) => scoped(server, tool, args, cls, files);
   const llmFor = opts.llmFor ?? ((id: string) => llmConfigFor(id));
   const startedAt = new Date().toISOString();
   const t0 = performance.now();
@@ -122,10 +223,11 @@ ${i.excerpt || ''}`) }));
         const relevant = items.filter((i) => i.category && categories.has(i.category)).slice(0, MAX_FEED_ITEMS);
         const touched = clauses.filter((c) => relevant.some((i) => i.category === c.category));
         // With no matching item the crew still checks every active rule.
-        const selected = touched.length ? touched : clauses;
+        const selected = touched.length && !opts.allRules ? touched : clauses;
+        const reason = opts.allRules ? 'every active rule was asked for' : touched.length ? 'feed items match these rules' : 'no feed item matches a rule; checking all active rules';
         return {
-          handoff: { feedItems: relevant, clauseIds: selected.map((c) => c.id), reason: touched.length ? 'feed items match these rules' : 'no feed item matches a rule; checking all active rules' },
-          summary: `Read ${items.length} feed items; ${relevant.length} match the categories of ${touched.length} active rule(s).${touched.length ? '' : ' Checking all active rules.'}`,
+          handoff: { feedItems: relevant, clauseIds: selected.map((c) => c.id), reason },
+          summary: `Read ${items.length} feed items; ${relevant.length} match the categories of ${touched.length} active rule(s).${selected.length === clauses.length && touched.length < clauses.length ? ' Checking all active rules.' : ''}`,
         };
       },
     }),
@@ -204,10 +306,23 @@ ${i.excerpt || ''}`) }));
           const out = await callTool(agent(5).mcpServer, agent(5).tool, { branchPrefix: 'lexcompiler/crew' }, toFix);
           const files = ((out.filePatches as Array<{ filePath: string }> | undefined) || []).map((p) => p.filePath);
           const verified = out.postPatchZ3Status === 'SAT_COMPLIANT';
+          const handoff: Record<string, unknown> = { status: out.status, postPatchZ3Status: out.postPatchZ3Status ?? null, branchName: out.branchName ?? null, files, gatePassed: verified, clauseIds: toFix.map((c) => c.id) };
+          let pr = '';
+          // Only a patch that passed the gate becomes a pull request (AGENTS.md §3).
+          if (verified && opts.openPullRequest) {
+            try {
+              const opened = await opts.openPullRequest();
+              handoff.pullRequest = opened;
+              pr = ` ${opened.created ? 'Opened' : 'Already open:'} pull request #${opened.prNumber}.`;
+            } catch (err) {
+              handoff.pullRequestError = err instanceof Error ? err.message : String(err);
+              pr = ` No pull request: ${String(handoff.pullRequestError)}`;
+            }
+          }
           return {
-            handoff: { status: out.status, postPatchZ3Status: out.postPatchZ3Status ?? null, branchName: out.branchName ?? null, files, gatePassed: verified, clauseIds: toFix.map((c) => c.id) },
+            handoff,
             summary: files.length
-              ? `Patched ${files.length} file(s) for ${toFix.length} rule(s); post-patch Z3 ${String(out.postPatchZ3Status)}${verified ? ', so the patch passes the gate' : ', so the gate blocks it'}.`
+              ? `Patched ${files.length} file(s) for ${toFix.length} rule(s); post-patch Z3 ${String(out.postPatchZ3Status)}${verified ? ', so the patch passes the gate' : ', so the gate blocks it'}.${pr}`
               : `No patch could be synthesized (${String(out.status)}).`,
           };
         },
@@ -246,6 +361,7 @@ ${i.excerpt || ''}`) }));
             ].join('\n\n'),
             mcpServerId: a.mcpServer,
             clauses: i === 0 ? clauses : crewClauses,
+            files,
             llm,
             maxTurns: 4,
           });
@@ -277,6 +393,7 @@ ${i.excerpt || ''}`) }));
     totalTokens: steps.reduce((n, s) => n + s.tokens, 0),
     latencyMs: Math.round(performance.now() - t0),
     triggeredBy: opts.triggeredBy ?? null,
+    ...(opts.target ? { target: opts.target } : {}),
     steps,
   };
 }
@@ -288,20 +405,21 @@ export class CrewRunStore {
   save(run: CrewRun): void {
     this.db
       .prepare(
-        `INSERT INTO agent_crew_runs (id, source, started_at, finished_at, use_models, status, gate, total_tokens, latency_ms, triggered_by, run_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO agent_crew_runs (id, source, started_at, finished_at, use_models, status, gate, total_tokens, latency_ms, triggered_by, run_json, workspace_id, repo_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
-      .run(run.id, run.source, run.startedAt, run.finishedAt, run.useModels ? 1 : 0, run.status, run.gate, run.totalTokens, run.latencyMs, run.triggeredBy, JSON.stringify(run));
+      .run(run.id, run.source, run.startedAt, run.finishedAt, run.useModels ? 1 : 0, run.status, run.gate, run.totalTokens, run.latencyMs, run.triggeredBy, JSON.stringify(run), run.target?.workspaceId ?? null, run.target?.repoId ?? null);
   }
 
-  get(id: string): CrewRun | null {
-    const row = this.db.prepare('SELECT run_json FROM agent_crew_runs WHERE id = ?').get(id) as { run_json: string } | undefined;
+  /** A run by id: with a workspace id, only that workspace's runs; with null, only runs on the bundled repository. */
+  get(id: string, workspaceId: string | null): CrewRun | null {
+    const row = this.db.prepare('SELECT run_json FROM agent_crew_runs WHERE id = ? AND workspace_id IS ?').get(id, workspaceId) as { run_json: string } | undefined;
     return row ? (JSON.parse(row.run_json) as CrewRun) : null;
   }
 
-  /** Newest first, without the steps. */
-  list(limit = 20): Array<Omit<CrewRun, 'steps'> & { stepStatuses: string[] }> {
-    const rows = this.db.prepare('SELECT run_json FROM agent_crew_runs ORDER BY started_at DESC LIMIT ?').all(limit) as Array<{ run_json: string }>;
+  /** Newest first, without the steps; a workspace's runs, or (null) the runs on the bundled repository. */
+  list(workspaceId: string | null, limit = 20): Array<Omit<CrewRun, 'steps'> & { stepStatuses: string[] }> {
+    const rows = this.db.prepare('SELECT run_json FROM agent_crew_runs WHERE workspace_id IS ? ORDER BY started_at DESC LIMIT ?').all(workspaceId, limit) as Array<{ run_json: string }>;
     return rows.map((r) => {
       const { steps, ...rest } = JSON.parse(r.run_json) as CrewRun;
       return { ...rest, stepStatuses: steps.map((s) => s.status) };

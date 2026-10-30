@@ -23,9 +23,11 @@ export function createAgentRouter(deps: {
   gateway: () => AiGateway;
   clauses: () => LegalClause[];
   runCrew?: typeof runCrew;
+  /** Shared with the workspace crew routes (default: a store on deps.db). */
+  runs?: CrewRunStore;
 }): express.Router {
   const router = express.Router();
-  const crewRuns = new CrewRunStore(deps.db);
+  const crewRuns = deps.runs ?? new CrewRunStore(deps.db);
   const run = deps.runCrew ?? runCrew;
 
   router.post('/api/agents/llm/v1/chat/completions', async (req, res, next) => {
@@ -79,11 +81,11 @@ export function createAgentRouter(deps: {
   });
 
   router.get('/api/agents/crew/runs', (_req, res) => {
-    res.json({ runs: crewRuns.list() });
+    res.json({ runs: crewRuns.list(null) });
   });
 
   router.get('/api/agents/crew/runs/:id', (req, res) => {
-    const found = crewRuns.get(req.params.id);
+    const found = crewRuns.get(req.params.id, null);
     if (!found) {
       res.status(404).json({ error: 'No such crew run.' });
       return;

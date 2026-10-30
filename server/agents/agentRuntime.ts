@@ -1,7 +1,7 @@
 import { performance } from 'node:perf_hooks';
 import { handleMcpMessage } from '../mcp/mcpSuite.js';
 import { recordLlmUsage } from '../optimization/neuralCompression.js';
-import type { LegalClause } from '../../shared/types.js';
+import type { LegalClause, TargetRepoFile } from '../../shared/types.js';
 import { getAiGateway } from '../ai/gateway.js';
 import type { ChatMessage, LlmConfig, LlmUsage, ToolSpec } from './llmClient.js';
 
@@ -66,6 +66,8 @@ export async function runAgent(params: {
   clauses: LegalClause[];
   llm: LlmConfig;
   maxTurns?: number;
+  /** The repository the agent's tools read (default: the bundled target repository). */
+  files?: TargetRepoFile[];
 }): Promise<AgentRun> {
   const t0 = performance.now();
   const list = await handleMcpMessage(params.mcpServerId, { jsonrpc: '2.0', id: 'list', method: 'tools/list' }, params.clauses);
@@ -93,7 +95,7 @@ export async function runAgent(params: {
       messages.push({ role: 'assistant', content: res.content, toolCalls: res.toolCalls });
       for (const call of res.toolCalls) {
         const s0 = performance.now();
-        const out = await handleMcpMessage(params.mcpServerId, { jsonrpc: '2.0', id: call.id, method: 'tools/call', params: { name: call.name, arguments: call.arguments } }, params.clauses);
+        const out = await handleMcpMessage(params.mcpServerId, { jsonrpc: '2.0', id: call.id, method: 'tools/call', params: { name: call.name, arguments: call.arguments } }, params.clauses, params.files);
         const result = out?.result as { content?: Array<{ text: string }>; isError?: boolean } | undefined;
         const text = result?.content?.map((c) => c.text).join('\n') || out?.error?.message || '';
         toolCalls.push({ name: call.name, arguments: call.arguments, ok: Boolean(result && !result.isError), latencyMs: Math.round((performance.now() - s0) * 100) / 100 });
