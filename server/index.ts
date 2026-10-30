@@ -13,7 +13,7 @@ import { mountWorkspaceRoutes } from './product/workspaceRoutes.js';
 import { createPublicRoutes } from './product/publicRoutes.js';
 import { createWorkspaceMcpHandler } from './mcp/workspaceMcp.js';
 import { createGovernanceJobHandlers } from './github/governanceJobs.js';
-import { getAiGateway } from './ai/gateway.js';
+import { AgentBudgetError, AgentRelayError, getAiGateway } from './ai/gateway.js';
 import { lexcompilerVersion } from './util/versions.js';
 import { GitHubApp, githubUrls } from './github/client.js';
 import { loadGitHubAppCredentials } from './github/credentials.js';
@@ -393,6 +393,29 @@ app.post('/api/mcp/:serverId/rpc', async (req, res) => {
   }
 });
 
+/**
+ * OpenAI-compatible chat completions for the Python agent crew (agents/). "model" is the agent
+ * id; the server picks that agent's configured model and key, enforces the agents' daily token
+ * budget and logs the call. Operator only (LEXCOMPILER_API_TOKEN, or loopback without sign-in).
+ */
+app.post('/api/agents/llm/v1/chat/completions', async (req, res) => {
+  const principal = res.locals.principal as { globalRole?: string } | undefined;
+  if (principal?.globalRole !== 'admin') {
+    res.status(403).json({ error: { message: 'The agent model route is for the server operator (LEXCOMPILER_API_TOKEN).', type: 'permission_error' } });
+    return;
+  }
+  try {
+    const body = (req.body || {}) as Record<string, unknown>;
+    res.json(await getAiGateway().relayAgentChat(String(body.model || ''), body));
+  } catch (err) {
+    if (err instanceof AgentBudgetError || err instanceof AgentRelayError) {
+      res.status(err.status).json({ error: { message: err.message, type: err instanceof AgentBudgetError ? 'budget_exceeded' : 'agent_route_error' } });
+      return;
+    }
+    sendError(res, err);
+  }
+});
+
 /** UI helper: runs tools/call and returns the full request/response trace. */
 app.post('/api/mcp/:serverId/invoke', async (req, res) => {
   try {
@@ -448,7 +471,7 @@ app.post('/api/rag/query', async (req, res) => {
 // MULTI-AGENT ORCHESTRATOR & TOKEN OPTIMIZATION LAB ENDPOINTS
 // ============================================================================
 
-app.get('/api/ai-heavy/overview', async (_req, res) => {
+app.get('/api/ai-heavy/overview', async (req, res) => {
   try {
     const rawFiles = readTargetRepoFiles();
     const { sqlTables, astFindings, enrichedFiles } = await analyzeFullRepositoryAsync(rawFiles);
@@ -463,13 +486,16 @@ app.get('/api/ai-heavy/overview', async (_req, res) => {
       verification.proofs
     );
 
+    // Opening the engine console never spends model credit: the agents call their tools
+    // directly unless ?agentModels=1 asks for the configured models (still budget-capped).
     const multiAgentReport = await buildMultiAgentExecutionReport(
       activeClauses,
       enrichedFiles,
       sqlTables,
       astFindings,
       verification.proofs,
-      pr
+      pr,
+      { useModels: req.query.agentModels === '1' }
     );
 
     const tokenBenchmark = await runTokenOptimizationBenchmarkAsync(

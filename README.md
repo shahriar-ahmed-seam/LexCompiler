@@ -282,11 +282,11 @@ A rule is enforced only after Legal approves a version of it. Each version freez
 
 Set `LEXCOMPILER_LLM_MODEL` (plus `LEXCOMPILER_LLM_PROVIDER` = `openai` | `anthropic`, `LEXCOMPILER_LLM_BASE_URL`, `LEXCOMPILER_LLM_API_KEY`), or per agent `LEXCOMPILER_AGENT_<ID>_MODEL` (e.g. `LEXCOMPILER_AGENT_Z3_FORMAL_CRITIC_MODEL=deepseek-reasoner` with `LEXCOMPILER_AGENT_Z3_FORMAL_CRITIC_BASE_URL=https://api.deepseek.com/v1`). Configured agents reason over their MCP tools with real tool calls and return validated structured output; the others call their tool directly.
 
-The Python adapters in `agents/` run each agent in its named framework (CrewAI, DSPy, Hermes, LangGraph, Pydantic-AI, OpenAI Agents SDK) against a running server:
+The Python adapters in `agents/` run each agent in its named framework (CrewAI, DSPy, Hermes, LangGraph, Pydantic-AI, OpenAI Agents SDK) against a running server. Their models go through the server's agent route (`/api/agents/llm/v1`, operator token only), which uses the agent's `LEXCOMPILER_AGENT_<ID>_*` model, holds the key, and caps the agents at `LEXCOMPILER_AGENT_MAX_DAILY_TOKENS` cloud tokens a day:
 
 ```bash
-pip install -r agents/requirements.txt
-cd agents && python -m lexcompiler_agents agent-contextual-graph-rag
+python3 -m venv .venv-agents && .venv-agents/bin/pip install -r agents/requirements.txt
+cd agents && ../.venv-agents/bin/python -m lexcompiler_agents agent-z3-formal-critic
 ```
 
 `npm run eval:rag` scores retrieval on the labelled dataset (`server/rag/eval/dataset.json`); with `LEXCOMPILER_AGENT_RAG_JUDGE_MODEL` set it also runs the RAGAS-style judge.

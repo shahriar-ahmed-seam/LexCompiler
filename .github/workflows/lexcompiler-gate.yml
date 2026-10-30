@@ -39,7 +39,7 @@ jobs:
       - name: Install sandbox frameworks (FastAPI, Pydantic, fakeredis)
         run: npm run setup:sandbox
 
-      - name: Python agent adapter tests (Pydantic-AI, LangGraph, Hermes)
+      - name: Python agent adapter tests (Pydantic-AI, LangGraph, Hermes, OpenAI Agents SDK)
         run: |
           python -m venv .venv-agents
           .venv-agents/bin/pip install -q -r agents/requirements-test.txt

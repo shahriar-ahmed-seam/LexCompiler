@@ -5,9 +5,30 @@ import json
 import os
 import urllib.request
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field
+
+#: Sent on every request to the server; the API guard requires it for loopback callers.
+CLIENT_HEADERS = {"X-LexCompiler-Client": "python-agents"}
+
+
+def setting(name: str, default: str | None = None) -> str | None:
+    """An environment variable, else the same key from the repository's .env (LEXCOMPILER_ENV_FILE overrides
+    the path). Only the key asked for is read, so provider keys in .env never enter the agents' process."""
+    value = os.environ.get(name)
+    if value:
+        return value
+    path = Path(os.environ.get("LEXCOMPILER_ENV_FILE") or Path(__file__).resolve().parents[2] / ".env")
+    try:
+        for line in path.read_text().splitlines():
+            key, sep, raw = line.strip().partition("=")
+            if sep and key.strip() == name:
+                return raw.strip().strip("\"'") or default
+    except OSError:
+        pass
+    return default
 
 
 class AgentOutput(BaseModel):
@@ -28,14 +49,14 @@ class McpTool:
 @dataclass
 class McpClient:
     server_id: str
-    base_url: str = field(default_factory=lambda: os.environ.get("LEXCOMPILER_URL", "http://127.0.0.1:3001"))
-    token: str | None = field(default_factory=lambda: os.environ.get("LEXCOMPILER_API_TOKEN"))
+    base_url: str = field(default_factory=lambda: setting("LEXCOMPILER_URL", "http://127.0.0.1:3001"))
+    token: str | None = field(default_factory=lambda: setting("LEXCOMPILER_API_TOKEN"))
     _id: int = 0
 
     def rpc(self, method: str, params: dict[str, Any] | None = None) -> Any:
         self._id += 1
         body = json.dumps({"jsonrpc": "2.0", "id": self._id, "method": method, "params": params or {}}).encode()
-        headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream", "X-LexCompiler-Client": "python-agents"}
+        headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream", **CLIENT_HEADERS}
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
         req = urllib.request.Request(f"{self.base_url.rstrip('/')}/api/mcp/{self.server_id}/rpc", data=body, headers=headers, method="POST")

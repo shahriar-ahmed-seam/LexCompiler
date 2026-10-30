@@ -1,6 +1,7 @@
 """agent-contextual-graph-rag: LangGraph state machine — retrieve, grade (CRAG), rewrite, answer."""
 from __future__ import annotations
 
+import sys
 from typing import Callable, TypedDict
 
 from langgraph.graph import END, START, StateGraph
@@ -32,7 +33,10 @@ def build_graph(client: McpClient, llm_answer: Callable[[str, dict], AgentOutput
     def answer(state: RagState) -> RagState:
         r = state["report"]
         if llm_answer:
-            return {"answer": llm_answer(state["query"], r)}
+            try:
+                return {"answer": llm_answer(state["query"], r)}
+            except Exception as err:  # the model is optional: fall back to the retriever's answer, and say so
+                print(f"[agent-contextual-graph-rag] model answer failed, using the retriever's answer: {err}", file=sys.stderr)
         chunks = r.get("retrievedChunks", [])
         return {
             "answer": AgentOutput(

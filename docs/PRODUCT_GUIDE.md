@@ -983,25 +983,38 @@ The check result is computed without a model (rule 1). Afterwards, if the worksp
 - Without one, a step is a single direct tool call (`DIRECT_TOOL_CALL`).
 - The framework names on screen (CrewAI, DSPy, Hermes, LangGraph, Pydantic-AI, OpenAI Swarm) refer to the Python adapters in `agents/lexcompiler_agents/`; the remediation adapter actually uses the OpenAI Agents SDK. The TypeScript server uses none of these frameworks.
 
-The adapters call the same MCP servers over HTTP, at `LEXCOMPILER_URL` (default `http://127.0.0.1:3001`) with `LEXCOMPILER_API_TOKEN` when it's set. To run one:
+The adapters call the same MCP servers over HTTP, at `LEXCOMPILER_URL` (default `http://127.0.0.1:3001`) with `LEXCOMPILER_API_TOKEN`. Both are read from the environment, or from the repository's `.env` when unset. Only those two keys are read, so provider keys never enter the agents' process.
+
+**Models go through the server.** Every framework except Hermes talks to the server's agent route, `POST /api/agents/llm/v1/chat/completions`, an OpenAI-compatible endpoint. The request's `model` is the agent id. The server then:
+- picks that agent's model from `LEXCOMPILER_AGENT_<ID>_*` (OpenAI-compatible providers only; Anthropic offers an OpenAI-compatible endpoint too);
+- holds the provider key;
+- refuses once the agents have used `LEXCOMPILER_AGENT_MAX_DAILY_TOKENS` cloud tokens that UTC day (default 100,000; local models are free and not counted), with HTTP 429;
+- logs each call in `ai_calls` with the agent id as the task.
+
+The route accepts only the operator token. Signed-in people, including the demo accounts, get 403. For providers without JSON-schema output, such as DeepSeek, the route puts the schema into the system prompt. It sets `json_object` only when the request has no tools, because that mode stops DeepSeek from calling tools.
+
+The engine console (`/lab`) never runs the agents' models on page load: each step calls its tool directly unless the request asks for `?agentModels=1`. The TypeScript runtime checks the same daily budget.
+
+To run one:
 
 ```bash
-python3 -m venv .venv-agents && . .venv-agents/bin/activate
-pip install -r agents/requirements.txt
-cd agents && python -m lexcompiler_agents agent-contextual-graph-rag --query "Which code keeps PII longer than 72 hours?"
+python3 -m venv .venv-agents
+.venv-agents/bin/pip install -r agents/requirements.txt
+cd agents && ../.venv-agents/bin/python -m lexcompiler_agents agent-z3-formal-critic
 ```
 
-The RAG adapter needs no model: without one, it returns the retriever's grounded answer. On October 29 it ran in 1.4 seconds with only `langgraph` installed, and named `schema/postgres_pii.sql:4`, `api/fastapi_intake.py:31` and `workers/redis_cache_worker.py:8` in the bundled fixture.
-
-The other adapters call a model. Pass `--model` or set the adapter's variable, and set that provider's usual key, such as `OPENAI_API_KEY`:
-
-| Adapter | Framework | Default model | Variable |
+| Agent | Framework | Model | Run on Oct 30 (fixture repo, DeepSeek) |
 |---|---|---|---|
-| `agent-horizon-scanner` | CrewAI | `gemini/gemini-2.5-flash` | `LEXCOMPILER_CREWAI_MODEL` |
-| `agent-deontic-extractor` | DSPy | `anthropic/claude-sonnet-4-5` | `LEXCOMPILER_DSPY_MODEL` |
-| `agent-polyglot-ast-mapper` | Hermes-style tool calls to Ollama | `qwen2.5-coder:7b`, not installed here | `LEXCOMPILER_HERMES_MODEL` |
-| `agent-z3-formal-critic` | Pydantic AI | `openai:gpt-4o` | `--model` only |
-| `agent-remediation-pr-enforcer` | OpenAI Agents SDK | `gpt-4o` | `LEXCOMPILER_OPENAI_AGENTS_MODEL` |
+| `agent-horizon-scanner` | CrewAI 1.15 | agent route | 13 live feed items classified; 3 calls, 8,358 tokens, 14 s |
+| `agent-deontic-extractor` | DSPy 3.3 ReAct | agent route | 72 h and tenant keys read from a DPA clause; 4 calls, 12,085 tokens, 12 s |
+| `agent-polyglot-ast-mapper` | Hermes-style tool calls to Ollama | local, `LEXCOMPILER_HERMES_MODEL` (default `qwen2.5-coder:7b`) | Finished on `qwen2.5-coder:0.5b`, but the answer described the tool instead of the scan. 0.5B is too small; the 7B model is not installed |
+| `agent-contextual-graph-rag` | LangGraph 1.2 | agent route for the answer (`--no-model`: the retriever's answer) | Named `schema/postgres_pii.sql:4` (720 h); 1 call, 979 tokens, 6 s |
+| `agent-z3-formal-critic` | Pydantic-AI 2.31 | agent route | 4 clauses UNSAT with cores and locations, matching the tool; 2 calls, 3,008 tokens, 6 s |
+| `agent-remediation-pr-enforcer` | OpenAI Agents SDK 0.20 (Swarm's successor) | agent route | Patch for 5 files, post-patch Z3 SAT_COMPLIANT, reviewer handoff; 3 calls, 7,200 tokens, 8 s |
+
+`--model` still takes a framework model string (for example `gemini/gemini-2.5-flash` for CrewAI or `openai:gpt-4o` for Pydantic-AI), with that provider's key in the agents' environment. CrewAI telemetry and its first-run trace prompt are off, and so is the OpenAI Agents SDK's trace upload (`LEXCOMPILER_AGENTS_TRACING=1` turns that on).
+
+The six agents still run one at a time, each on the bundled fixture. They don't pass results to each other yet.
 
 **In the product,** keep two agents that do real work:
 - **Regulation watch** (Phase 6) reads new Federal Register and EUR-Lex items, summarizes them, finds the rules they may affect with RAG, and puts drafts in Legal's inbox. It has no tool that approves.

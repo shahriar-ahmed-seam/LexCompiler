@@ -23,7 +23,7 @@ import type {
 interface AgentStepSpec {
   agentId: string;
   agentName: string;
-  /** Framework of this agent's optional Python adapter in agents/lexcompiler_agents (not used by this pipeline). */
+  /** Framework of this agent in the Python crew (agents/lexcompiler_agents); this TypeScript pipeline does not use it. */
   pythonAdapter: string;
   mcpServerCalled: string;
   mcpToolCalled: string;
@@ -45,8 +45,12 @@ export async function buildMultiAgentExecutionReport(
   astFindings: ASTFindingNode[],
   proofs: ClauseVerificationProof[],
   // Kept for API compatibility; the remediation agent re-runs the synthesizer itself.
-  _remediationPR?: RemediationPullRequest | null
+  _remediationPR?: RemediationPullRequest | null,
+  /** useModels: false makes every step a direct tool call even when agent models are configured (no model spend). */
+  options: { useModels?: boolean } = {}
 ): Promise<MultiAgentPipelineReport> {
+  const useModels = options.useModels ?? true;
+  const modelFor = (agentId: string) => (useModels ? llmConfigFor(agentId) : null);
   const t0 = performance.now();
   const legal = clauses.map((c) => `${c.citation}: ${c.rawLegalText}`).join('\n');
   const legalSlim = clauses.map((c) => `${c.citation}: ${compressLegalProseCaveman(c.rawLegalText)}`).join('\n');
@@ -136,7 +140,7 @@ export async function buildMultiAgentExecutionReport(
 
   const steps: AgentExecutionStep[] = [];
   for (const [idx, spec] of specs.entries()) {
-    const llm = llmConfigFor(spec.agentId);
+    const llm = modelFor(spec.agentId);
     if (llm) {
       // A configured model reasons over the agent's MCP tools and returns a validated answer.
       try {
@@ -210,7 +214,7 @@ export async function buildMultiAgentExecutionReport(
     });
   }
 
-  const configured = specs.filter((sp) => llmConfigFor(sp.agentId));
+  const configured = specs.filter((sp) => modelFor(sp.agentId));
   const totalRawTokens = steps.reduce((acc, s) => acc + s.inputTokensRaw, 0);
   const totalOptimizedTokens = steps.reduce((acc, s) => acc + s.inputTokensOptimized, 0);
   const totalLatencyMs = Math.round((performance.now() - t0) * 10) / 10;
@@ -220,9 +224,11 @@ export async function buildMultiAgentExecutionReport(
     triggeredAt: new Date().toISOString(),
     orchestrationPattern: configured.length
       ? `Six steps in sequence, one MCP server each. ${configured.length} of 6 steps run a tool-calling model loop; the rest call their tool directly.`
-      : 'Six steps in sequence, one MCP server each. No model is configured, so each step calls its tool directly (set LEXCOMPILER_LLM_MODEL).',
+      : useModels
+        ? 'Six steps in sequence, one MCP server each. No model is configured, so each step calls its tool directly (set LEXCOMPILER_LLM_MODEL).'
+        : 'Six steps in sequence, one MCP server each. Each step calls its tool directly; models are used only when asked for (?agentModels=1).',
     activeFrameworks: configured.length ? ['LexCompiler agent runtime (TypeScript tool-calling loop)'] : [],
-    activeLlms: configuredModels(specs.map((sp) => ({ agentId: sp.agentId, agentName: sp.agentName }))),
+    activeLlms: useModels ? configuredModels(specs.map((sp) => ({ agentId: sp.agentId, agentName: sp.agentName }))) : [],
     totalLatencyMs,
     totalRawTokens,
     totalOptimizedTokens,

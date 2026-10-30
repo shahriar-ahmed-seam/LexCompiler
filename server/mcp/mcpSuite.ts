@@ -9,6 +9,7 @@ import {
   inferRuleCategoryFromProse,
   sha256Hex,
 } from '../compiler/legalCompiler.js';
+import { RULE_CATEGORIES } from '../product/clauses.js';
 import { verifyRepositoryAgainstClauses } from '../prover/z3Engine.js';
 import { executeNeuralRetrieval } from '../rag/hybridRagEngine.js';
 import { synthesizeRemediationPullRequest } from '../remediation/prSynthesizer.js';
@@ -85,7 +86,8 @@ export function getMcpServersCatalog(): McpServerDescriptor[] {
             type: 'object',
             properties: {
               rawLegalText: { type: 'string' },
-              category: { type: 'string' },
+              // An unknown category used to fall through to another category's template; now it is rejected.
+              category: { type: 'string', enum: RULE_CATEGORIES, description: 'Leave out to infer the category from the text.' },
               citation: { type: 'string' },
             },
             required: ['rawLegalText'],
