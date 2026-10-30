@@ -13,7 +13,7 @@ import { mountWorkspaceRoutes } from './product/workspaceRoutes.js';
 import { createPublicRoutes } from './product/publicRoutes.js';
 import { createWorkspaceMcpHandler } from './mcp/workspaceMcp.js';
 import { createGovernanceJobHandlers } from './github/governanceJobs.js';
-import { AgentBudgetError, AgentRelayError, getAiGateway } from './ai/gateway.js';
+import { getAiGateway } from './ai/gateway.js';
 import { lexcompilerVersion } from './util/versions.js';
 import { GitHubApp, githubUrls } from './github/client.js';
 import { loadGitHubAppCredentials } from './github/credentials.js';
@@ -48,7 +48,7 @@ import {
   inferRuleCategoryFromProse,
 } from './compiler/legalCompiler.js';
 import { getMcpServersCatalog, handleMcpMessage, invokeMcpTool } from './mcp/mcpSuite.js';
-import { CrewRunStore, importedRun, runCrew, validateImportedRun } from './agents/crew.js';
+import { createAgentRouter } from './agents/routes.js';
 import { loadActiveClauseState, saveActiveClauseState } from './state.js';
 import {
   compressLegalProseCaveman,
@@ -394,81 +394,8 @@ app.post('/api/mcp/:serverId/rpc', async (req, res) => {
   }
 });
 
-/**
- * OpenAI-compatible chat completions for the Python agent crew (agents/). "model" is the agent
- * id; the server picks that agent's configured model and key, enforces the agents' daily token
- * budget and logs the call. Operator only (LEXCOMPILER_API_TOKEN, or loopback without sign-in).
- */
-app.post('/api/agents/llm/v1/chat/completions', async (req, res) => {
-  const principal = res.locals.principal as { globalRole?: string } | undefined;
-  if (principal?.globalRole !== 'admin') {
-    res.status(403).json({ error: { message: 'The agent model route is for the server operator (LEXCOMPILER_API_TOKEN).', type: 'permission_error' } });
-    return;
-  }
-  try {
-    const body = (req.body || {}) as Record<string, unknown>;
-    res.json(await getAiGateway().relayAgentChat(String(body.model || ''), body));
-  } catch (err) {
-    if (err instanceof AgentBudgetError || err instanceof AgentRelayError) {
-      res.status(err.status).json({ error: { message: err.message, type: err instanceof AgentBudgetError ? 'budget_exceeded' : 'agent_route_error' } });
-      return;
-    }
-    sendError(res, err);
-  }
-});
-
-/**
- * The six agents chained (server/agents/crew.ts). Without models every step is a direct tool
- * call; { "useModels": true } lets each agent's configured model report too, which spends the
- * agents' daily budget, so only the operator may ask for it.
- */
-const crewRuns = new CrewRunStore(getDb());
-
-app.post('/api/agents/crew/runs', async (req, res) => {
-  const principal = res.locals.principal as { sub?: string; globalRole?: string } | undefined;
-  const useModels = req.body?.useModels === true;
-  if (useModels && principal?.globalRole !== 'admin') {
-    res.status(403).json({ error: 'Running the crew with models is for the server operator (LEXCOMPILER_API_TOKEN).' });
-    return;
-  }
-  try {
-    const run = await runCrew(activeClauses, { useModels, triggeredBy: principal?.sub ?? null });
-    crewRuns.save(run);
-    res.status(201).json(run);
-  } catch (err) {
-    sendError(res, err);
-  }
-});
-
-/** A run of the Python crew (python -m lexcompiler_agents crew), stored as it reports it. Operator only. */
-app.post('/api/agents/crew/runs/import', (req, res) => {
-  const principal = res.locals.principal as { sub?: string; globalRole?: string } | undefined;
-  if (principal?.globalRole !== 'admin') {
-    res.status(403).json({ error: 'Storing a Python crew run is for the server operator (LEXCOMPILER_API_TOKEN).' });
-    return;
-  }
-  const problem = validateImportedRun(req.body);
-  if (problem) {
-    res.status(400).json({ error: problem });
-    return;
-  }
-  const run = importedRun(getDb(), req.body as Record<string, unknown>, principal.sub ?? null);
-  crewRuns.save(run);
-  res.status(201).json({ id: run.id });
-});
-
-app.get('/api/agents/crew/runs', (_req, res) => {
-  res.json({ runs: crewRuns.list() });
-});
-
-app.get('/api/agents/crew/runs/:id', (req, res) => {
-  const run = crewRuns.get(req.params.id);
-  if (!run) {
-    res.status(404).json({ error: 'No such crew run.' });
-    return;
-  }
-  res.json(run);
-});
+// The agent crew: the model route for the Python agents, and chained crew runs (server/agents/routes.ts).
+app.use(createAgentRouter({ db: getDb(), gateway: getAiGateway, clauses: () => activeClauses }));
 
 /** UI helper: runs tools/call and returns the full request/response trace. */
 app.post('/api/mcp/:serverId/invoke', async (req, res) => {

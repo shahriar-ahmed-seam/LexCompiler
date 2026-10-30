@@ -160,7 +160,7 @@ LEXCOMPILER_HERMES_MODEL=qwen2.5-coder:0.5b ../.venv-agents/bin/python -m lexcom
 2. **Hermes on a real model.** Pull `qwen2.5-coder:7b` (about 4.7 GB). This machine has 15 GB of RAM with little free while Chrome and Kiro run, so try `qwen2.5-coder:3b` if the 7B is too slow. Then re-run agent 3.
 3. **Remediation opens a real PR.** Give the GitHub App `contents: write` and `pull_requests: write`, then open the verified patch as a pull request on `finhealth-core-platform`, but only when post-patch Z3 is SAT_COMPLIANT (the `AGENTS.md` §3 gate).
 4. **Point agents at real repositories.** The six MCP servers read the bundled fixture and the demo clauses. Let a run take a workspace and repository, so the crew works on the repository and rules the judges see.
-5. **Tests.** Add vitest cases for the agent route (403 for signed-in users, the budget's 429, `relayBody` for DeepSeek) and pytest cases for the CrewAI and DSPy adapters against a stub server.
+5. **Tests.** The agent route is covered: `server/agentRoutes.test.ts` (403 for signed-in users and anonymous callers, relayed fields and the 4,096-token cap, 400/404 refusals, the budget's 429 with local models not counted, `relayBody` for DeepSeek with and without tools, and the crew routes); the endpoints moved unchanged to `server/agents/routes.ts`. Still to do: pytest cases for the CrewAI and DSPy adapters against a stub server.
 6. **Product placement** (product guide, 5.7): the horizon scanner becomes Regulation watch (Phase 6), and the remediation agent becomes the fix agent (Phase 4).
 
 ## Full check before a merge
