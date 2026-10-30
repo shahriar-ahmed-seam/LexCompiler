@@ -218,6 +218,11 @@ export function inferRuleCategoryFromProse(
   rawText: string,
   fallback: RuleCategory = 'RETENTION_AND_TENANT_KMS'
 ): RuleCategory {
+  return inferRuleCategoryWithEvidence(rawText) ?? fallback;
+}
+
+/** The category the wording points to, or null when no category has any evidence. */
+export function inferRuleCategoryWithEvidence(rawText: string): RuleCategory | null {
   const { lower } = normalizeLegalProse(rawText);
   // Governance categories first: their trigger phrases are specific.
   if (/personal data breach|breach notification|notify the supervisory authority|article 33\b/.test(lower)) return 'BREACH_NOTIFICATION';
@@ -237,7 +242,7 @@ export function inferRuleCategoryFromProse(
       bestScore = score;
     }
   }
-  return best ?? fallback;
+  return best;
 }
 
 /**

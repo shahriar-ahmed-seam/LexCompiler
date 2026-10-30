@@ -1007,14 +1007,28 @@ cd agents && ../.venv-agents/bin/python -m lexcompiler_agents agent-z3-formal-cr
 |---|---|---|---|
 | `agent-horizon-scanner` | CrewAI 1.15 | agent route | 13 live feed items classified; 3 calls, 8,358 tokens, 14 s |
 | `agent-deontic-extractor` | DSPy 3.3 ReAct | agent route | 72 h and tenant keys read from a DPA clause; 4 calls, 12,085 tokens, 12 s |
-| `agent-polyglot-ast-mapper` | Hermes-style tool calls to Ollama | local, `LEXCOMPILER_HERMES_MODEL` (default `qwen2.5-coder:7b`) | Finished on `qwen2.5-coder:0.5b`, but the answer described the tool instead of the scan. 0.5B is too small; the 7B model is not installed |
+| `agent-polyglot-ast-mapper` | Hermes-style tool calls to Ollama | local, `LEXCOMPILER_HERMES_MODEL` (default `llama3.2`, 3B) | On `llama3.2`: the scan's construct types in 16 s on a 6 GB laptop GPU (the answer schema is enforced on the correction turn). 0.5B was too small; 7B doesn't fit a 6 GB GPU with the desktop running |
 | `agent-contextual-graph-rag` | LangGraph 1.2 | agent route for the answer (`--no-model`: the retriever's answer) | Named `schema/postgres_pii.sql:4` (720 h); 1 call, 979 tokens, 6 s |
 | `agent-z3-formal-critic` | Pydantic-AI 2.31 | agent route | 4 clauses UNSAT with cores and locations, matching the tool; 2 calls, 3,008 tokens, 6 s |
 | `agent-remediation-pr-enforcer` | OpenAI Agents SDK 0.20 (Swarm's successor) | agent route | Patch for 5 files, post-patch Z3 SAT_COMPLIANT, reviewer handoff; 3 calls, 7,200 tokens, 8 s |
 
 `--model` still takes a framework model string (for example `gemini/gemini-2.5-flash` for CrewAI or `openai:gpt-4o` for Pydantic-AI), with that provider's key in the agents' environment. CrewAI telemetry and its first-run trace prompt are off, and so is the OpenAI Agents SDK's trace upload (`LEXCOMPILER_AGENTS_TRACING=1` turns that on).
 
-The six agents still run one at a time, each on the bundled fixture. They don't pass results to each other yet.
+**The crew, chained.** The six agents can also run as one chain, each receiving what the previous one found (`server/agents/crew.ts`):
+
+| Step | Agent | Receives | Hands on |
+|---|---|---|---|
+| 1 | Horizon scanner | The active rules | Feed items whose category (from their wording) matches a rule, and those rules' ids. With no match, every active rule |
+| 2 | Deontic extractor | Rule ids | Each rule compiled from its text (formula, SMT-LIB2, Rego). Steps 3–6 check these compiled rules |
+| 3 | AST mapper | Compiled rules | Where each rule's pattern matches (`file:line`) |
+| 4 | Graph RAG | Locations | The sources retrieved for a query built from the rules' formulas and the mapper's locations |
+| 5 | Z3 critic | Sources | The rules Z3 refutes, with unsat cores and locations |
+| 6 | Remediation | Refuted rules | A patch for those rules only, and whether post-patch Z3 is SAT_COMPLIANT. Skipped when nothing is refuted |
+
+The run's gate is NOTHING_TO_FIX, PATCH_VERIFIED, PATCH_BLOCKED or INCOMPLETE (a step failed; the chain stops there). What passes between agents comes from tool results only, never from model text, so a model's mistake can't travel down the chain.
+
+- **On the server:** `POST /api/agents/crew/runs` runs it. Every step is a direct tool call and costs nothing; `{"useModels": true}` (operator only) also lets each agent's model read what it received and report, within the agents' daily budget. `GET /api/agents/crew/runs` and `/runs/<id>` read stored runs (migration 5, `agent_crew_runs`).
+- **In Python:** `python -m lexcompiler_agents crew` runs the six framework agents in order, each given the previous agent's report as context. The gate comes from the remediation tool's own result. The run is sent to `POST /api/agents/crew/runs/import` (operator only), which fills in each agent's tokens from `ai_calls`. `--no-store` only prints it.
 
 **In the product,** keep two agents that do real work:
 - **Regulation watch** (Phase 6) reads new Federal Register and EUR-Lex items, summarizes them, finds the rules they may affect with RAG, and puts drafts in Legal's inbox. It has no tool that approves.

@@ -7,7 +7,7 @@ import os
 from agents import Agent, FunctionTool, Model, OpenAIChatCompletionsModel, Runner, set_tracing_disabled
 
 from .llm import route
-from .mcp_client import AgentOutput, McpClient
+from .mcp_client import AgentOutput, McpClient, with_context
 
 AGENT_ID = "agent-remediation-pr-enforcer"
 
@@ -35,7 +35,7 @@ def default_model() -> Model:
     return OpenAIChatCompletionsModel(model=r.agent_id, openai_client=client)
 
 
-def run(client: McpClient | None = None, model: str | Model | None = None, max_turns: int = 6) -> AgentOutput:
+def run(client: McpClient | None = None, model: str | Model | None = None, max_turns: int = 6, context: str = "") -> AgentOutput:
     client = client or McpClient("lex-remediation-pr-mcp")
     model = model or default_model()
     reviewer = Agent(
@@ -56,4 +56,4 @@ def run(client: McpClient | None = None, model: str | Model | None = None, max_t
         handoffs=[reviewer],
         output_type=AgentOutput,
     )
-    return Runner.run_sync(synthesizer, "Remediate the repository and verify the patch.", max_turns=max_turns).final_output
+    return Runner.run_sync(synthesizer, with_context("Remediate the repository and verify the patch.", context), max_turns=max_turns).final_output

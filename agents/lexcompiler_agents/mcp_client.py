@@ -31,6 +31,13 @@ def setting(name: str, default: str | None = None) -> str | None:
     return default
 
 
+def with_context(task: str, context: str = "") -> str:
+    """The task, preceded by what the previous agent in the crew reported (python -m lexcompiler_agents crew)."""
+    if not context:
+        return task
+    return f"The previous agent in the crew reported:\n{context[:3000]}\n\nCheck it against your own tool results.\n\n{task}"
+
+
 class AgentOutput(BaseModel):
     """Structured answer every agent returns (same schema as the TypeScript runtime)."""
 
