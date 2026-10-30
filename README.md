@@ -413,4 +413,9 @@ Built-in clauses and curated feed items are **illustrative**: they paraphrase th
 
 ## License
 
-MIT License (see [`LICENSE`](LICENSE)). Built by Shahriar Ahmed Seam for the International AI Builders Congress (JusticeSphere AI — ComplianceOS / GovernanceIQ Track).
+MIT License (see [`LICENSE`](LICENSE)). Built for the International AI Builders Congress (JusticeSphere AI — ComplianceOS / GovernanceIQ Track) by:
+
+- **Shahriar Ahmed Seam** ([@shahriar-ahmed-seam](https://github.com/shahriar-ahmed-seam))
+- **Shakil Ahmed** ([@MRSHAKILS](https://github.com/MRSHAKILS))
+
+The submission files are in [`docs/submission/`](docs/submission/): start with `TEAMMATE_CHECKLIST.md`.
