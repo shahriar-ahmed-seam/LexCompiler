@@ -27,6 +27,8 @@ export interface ServerSecurityConfig {
   runtimeSandboxEnabled: boolean;
   /** OIDC sign-in is configured (LEXCOMPILER_OIDC_ISSUER + LEXCOMPILER_OIDC_CLIENT_ID). */
   oidcEnabled: boolean;
+  /** Email and password sign-in (LEXCOMPILER_SIGN_IN=password). Like OIDC, every request then needs a signed-in person. */
+  passwordSignIn: boolean;
   /** Project role every signed-in user has on the default (single-repository) project. */
   defaultProjectRole: 'viewer' | 'editor' | 'owner' | 'none';
 }
@@ -45,14 +47,23 @@ export function isLoopbackHostname(hostname: string): boolean {
 export function resolveServerSecurityConfig(env: NodeJS.ProcessEnv = process.env): ServerSecurityConfig {
   const port = env.PORT ? parseInt(env.PORT, 10) : 3001;
   const extraOrigins = splitList(env.LEXCOMPILER_ALLOWED_ORIGINS);
+  // The address people use (LEXCOMPILER_PUBLIC_URL) is always an allowed browser origin.
+  let publicOrigin: string | null = null;
+  try {
+    publicOrigin = env.LEXCOMPILER_PUBLIC_URL ? new URL(env.LEXCOMPILER_PUBLIC_URL).origin : null;
+  } catch {
+    publicOrigin = null;
+  }
+  const origins = extraOrigins.length > 0 ? extraOrigins : DEFAULT_ALLOWED_ORIGINS;
   return {
     host: env.HOST || '127.0.0.1',
     port,
     apiToken: env.LEXCOMPILER_API_TOKEN?.trim() || null,
-    allowedOrigins: extraOrigins.length > 0 ? extraOrigins : DEFAULT_ALLOWED_ORIGINS,
+    allowedOrigins: publicOrigin && !origins.includes(publicOrigin) ? [...origins, publicOrigin] : origins,
     allowedHosts: splitList(env.LEXCOMPILER_ALLOWED_HOSTS).map((h) => h.toLowerCase()),
     runtimeSandboxEnabled: env.LEXCOMPILER_ENABLE_RUNTIME_SANDBOX === '1',
     oidcEnabled: Boolean(env.LEXCOMPILER_OIDC_ISSUER?.trim() && env.LEXCOMPILER_OIDC_CLIENT_ID?.trim()),
+    passwordSignIn: env.LEXCOMPILER_SIGN_IN === 'password',
     defaultProjectRole: (['viewer', 'editor', 'owner', 'none'] as const).find((r) => r === env.LEXCOMPILER_DEFAULT_PROJECT_ROLE) || 'viewer',
   };
 }
@@ -62,7 +73,7 @@ export function resolveServerSecurityConfig(env: NodeJS.ProcessEnv = process.env
  * rewrite target-repo files and trigger Git commits.
  */
 export function assertSafeBindConfig(config: ServerSecurityConfig): void {
-  if (!isLoopbackHostname(config.host) && !config.apiToken && !config.oidcEnabled) {
+  if (!isLoopbackHostname(config.host) && !config.apiToken && !config.oidcEnabled && !config.passwordSignIn) {
     throw new Error(
       `Refusing to listen on non-loopback host "${config.host}" without LEXCOMPILER_API_TOKEN or OIDC. ` +
         'Set LEXCOMPILER_API_TOKEN or LEXCOMPILER_OIDC_ISSUER/LEXCOMPILER_OIDC_CLIENT_ID, or bind to 127.0.0.1.'
@@ -95,7 +106,7 @@ export function isOriginAllowed(config: ServerSecurityConfig, origin: string | u
  * - Without a token, the Host header must be loopback (or allowlisted) to defeat
  *   DNS rebinding, and the client header must be present.
  */
-const PUBLIC_AUTH_PATHS = new Set(['/auth/config', '/auth/login', '/auth/callback']);
+const PUBLIC_AUTH_PATHS = new Set(['/auth/config', '/auth/login', '/auth/callback', '/auth/password', '/auth/logout']);
 const ROLE_RANK = { none: 0, viewer: 1, editor: 2, owner: 3 } as const;
 
 /** Resolves the caller from a bearer token or session cookie (OIDC); null when unauthenticated. */
@@ -107,8 +118,11 @@ function isWorkspaceScopedPath(p: string): boolean {
 }
 
 export function createApiGuard(config: ServerSecurityConfig, authenticate?: Authenticator) {
+  // With sign-in on, every request needs a signed-in person (or the API token); requests from this
+  // machine get no special rights, because a tunnel makes public requests arrive from loopback.
+  const signIn = config.oidcEnabled || config.passwordSignIn;
   return (req: Request, res: Response, next: NextFunction): void => {
-    if (req.path === '/health' || req.method === 'OPTIONS' || (config.oidcEnabled && PUBLIC_AUTH_PATHS.has(req.path))) {
+    if (req.path === '/health' || req.method === 'OPTIONS' || (signIn && PUBLIC_AUTH_PATHS.has(req.path))) {
       next();
       return;
     }
@@ -119,15 +133,15 @@ export function createApiGuard(config: ServerSecurityConfig, authenticate?: Auth
       return;
     }
 
-    if (config.oidcEnabled && authenticate) {
+    if (signIn && authenticate) {
       authenticate(req)
         .then((principal) => {
           if (!principal) {
-            res.status(401).json({ error: 'Sign in required.', authRequired: true, loginUrl: '/api/auth/login' });
+            res.status(401).json({ error: 'Sign in required.', authRequired: true, loginUrl: config.oidcEnabled ? '/api/auth/login' : '/login' });
             return;
           }
           // Cookie sessions also need the client header on writes (CSRF: no custom header cross-site).
-          if (principal.via === 'oidc-session' && req.method !== 'GET' && !req.headers[CLIENT_HEADER]) {
+          if ((principal.via === 'oidc-session' || principal.via === 'password-session') && req.method !== 'GET' && !req.headers[CLIENT_HEADER]) {
             res.status(403).json({ error: `Missing required "${CLIENT_HEADER}" request header.` });
             return;
           }

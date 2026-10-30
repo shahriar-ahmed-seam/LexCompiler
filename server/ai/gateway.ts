@@ -142,7 +142,9 @@ export class AiGateway {
     const mode = input.mode === undefined ? current.mode : input.mode;
     if (!AI_MODES.includes(mode as AiMode)) throw new Error(`mode must be one of ${AI_MODES.join(', ')}`);
     const budget = input.dailyTokenBudget === undefined ? current.dailyTokenBudget : Number(input.dailyTokenBudget);
-    if (!Number.isInteger(budget) || budget < 0 || budget > 50_000_000) throw new Error('dailyTokenBudget must be a whole number between 0 and 50,000,000');
+    // The server operator's ceiling (LEXCOMPILER_AI_MAX_DAILY_TOKENS) protects a prepaid key from any one workspace.
+    const ceiling = Number(this.env.LEXCOMPILER_AI_MAX_DAILY_TOKENS) || 50_000_000;
+    if (!Number.isInteger(budget) || budget < 0 || budget > ceiling) throw new Error(`dailyTokenBudget must be a whole number between 0 and ${ceiling.toLocaleString('en-US')}`);
     this.db
       .prepare(
         `INSERT INTO workspace_ai_settings (workspace_id, mode, daily_token_budget, updated_by, updated_at) VALUES (?, ?, ?, ?, ?)
@@ -158,6 +160,12 @@ export class AiGateway {
     const demo = (this.env.LEXCOMPILER_DEMO_AI_MODE || 'local') as AiMode;
     if (!AI_MODES.includes(demo) || demo === 'off') return 'off';
     return requested && requested !== 'off' ? requested : demo;
+  }
+
+  /** The daily budget in force: the workspace's setting, never above the server's ceiling. */
+  effectiveBudget(workspaceId: string): number {
+    const ceiling = Number(this.env.LEXCOMPILER_AI_MAX_DAILY_TOKENS) || Infinity;
+    return Math.min(this.settings(workspaceId).dailyTokenBudget, ceiling);
   }
 
   tokensUsedToday(workspaceId: string, now = new Date()): number {
@@ -203,8 +211,7 @@ export class AiGateway {
     const endpointHost = new URL(cfg.baseUrl).host;
     const model = cfg.model;
     if (req.workspaceId) {
-      const { dailyTokenBudget } = this.settings(req.workspaceId);
-      if (this.tokensUsedToday(req.workspaceId) >= dailyTokenBudget) return { ...base, model, endpointHost, ok: false, refused: 'budget' };
+      if (this.tokensUsedToday(req.workspaceId) >= this.effectiveBudget(req.workspaceId)) return { ...base, model, endpointHost, ok: false, refused: 'budget' };
     }
 
     const messages: ChatMessage[] = [...(req.system ? [{ role: 'system' as const, content: req.system }] : []), { role: 'user', content: req.prompt }];

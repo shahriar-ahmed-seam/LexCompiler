@@ -8,12 +8,12 @@
 > | 1. Database | Done: #31 |
 > | 2. GitHub App and pull-request checks | Done: #32, #33 |
 > | 2a. AI foundation (section 5.3) | Mostly done: #35 (RAG embeddings, duration parser, model labels), #36 (AI gateway, AI setting per workspace, call log, extraction eval). Left: the larger RAG eval set |
-> | 3. The lawyer's workspace | Planned |
-> | 4. Fixes and exceptions | Planned |
-> | 4a. MCP server for coding assistants (section 5.8) | Planned |
-> | 5. Evidence and the auditor | Planned |
+> | 3. The lawyer's workspace | Mostly done in #37: rule card with AI drafting and checks, approval, versions, re-checks. Left: PDF/DOCX upload, clause splitting, counterparty scope |
+> | 4. Fixes and exceptions | Exceptions done in #37 (GitHub button, coding assistants, web app; Legal inbox; PR comments; expiry). Left: fix PRs, suggestion comments |
+> | 4a. MCP server for coding assistants (section 5.8) | Done in #37: `POST /mcp`, personal tokens, five tools, tested from Kiro. Left: `suggest_fix`, protocol 2026-07-28 |
+> | 5. Evidence and the auditor | Mostly done in #37: signed hash-chained log, share links, verification in the browser. Left: zip pack with `verify.mjs`, timestamps |
 > | 6. Contract and regulation changes | Planned |
-> | 7. Online for outside testers | Planned |
+> | 7. Online for outside testers | Started in #37: password sign-in, Cloudflare quick tunnel. Left: a permanent address |
 >
 > To pick up the work, read `docs/HANDOFF.md` first.
 >
@@ -497,6 +497,8 @@ Then:
 
 ### Phase 3. The lawyer's workspace (5–6 days) · scene 2
 
+> **Status (#37):** the rule card works in the web app (`/app/rules/new`): paste a clause, read it with the parser and, when the workspace has AI on, the model through the checks in 5.4; edit the value; see the plain reading, highlights and "N places would fail"; approve with an effective date. Approval writes evidence and re-checks the default branch and open pull requests. Not built yet: document upload and clause splitting (items 1 and 2), counterparty scope, the library.
+
 **Build**
 
 1. **Documents.**
@@ -541,6 +543,8 @@ Then:
 
 ### Phase 4. Fixes and exceptions (3–4 days) · scenes 3 and 4
 
+> **Status (#37):** item 3 (exceptions) and item 4 (the Legal inbox) are done: the check run's **Request exception** button, `request_exception` from coding assistants, and a button on each finding in the web app; approval with a required expiry, rejection and revocation; PR comments; re-checks; an expiry sweep every 10 minutes. Items 1 and 2 (fix PRs and suggestion comments) are not built.
+
 **Build**
 
 1. **Fix PRs for `main`.**
@@ -571,6 +575,8 @@ Then:
 3. **Expiry.** With a test-only admin action, set the exception's expiry to yesterday, then push any commit. The check fails again.
 
 ### Phase 5. Evidence and the auditor (4–5 days) · scene 7
+
+> **Status (#37):** the evidence log (header and body, Ed25519, hash chain, append-only triggers), public keys at `/.well-known/lexcompiler/<workspace>/keys.json`, the header hash in check-run summaries, share links with a view log, and the share page with verification in the browser are done. The zip pack with `verify.mjs`, RFC 3161 timestamps and per-counterparty bodies are not built.
 
 **Build**
 
@@ -893,11 +899,13 @@ This comes before Phase 3, because AI drafting and PR explanations build on it.
 | `qwen2.5-coder:0.5b` with checks | 26 | 0 | 19 | |
 | `dolphin3` (8B) alone | 27 | 10 | 8 | 9.4 s, 254 tokens |
 | `dolphin3` (8B) with checks | 31 | 0 | 14 | |
+| `deepseek-chat` (cloud) alone | 41 | 2 | 2 | 0.9 s, 252 tokens |
+| `deepseek-chat` with checks | 43 | 0 | 2 | |
 
 - The checks hold: no checked mode produced a wrong value.
 - The parser's 4 wrong values come from clauses with two candidate numbers, a hidden instruction or a minimum period. The parser takes the strictest number; the checks turn these clauses into questions for Legal instead.
 - With these local models, the model adds no correct value the parser lacks, because a model value is shown only when the parser agrees. Their use is the other card fields: quotes to highlight, questions, and the plain-language reading.
-- A cloud model hasn't been measured yet. Once one is configured, run `npm run eval:extract -- --model cloud`.
+- `deepseek-chat` was measured on October 30 (`npm run eval:extract -- --model cloud`, about $0.004 for the run). Its 2 wrong values are the hidden-instruction clause and "no later than the third day"; the checks turned both into questions. With the checks it is as accurate as the parser and adds a verified quote, which the rule card highlights.
 
 **Done when**
 - `POST /api/rag/query` answers with Ollama running, on the fixture and on `finhealth-core-platform`.
@@ -1038,6 +1046,8 @@ npx -y @modelcontextprotocol/inspector@latest --cli \
 Run in `repos/finhealth-core-platform` on `feat/loan-applications`, the stdio call returns four `UNSAT_VIOLATION` verdicts. One of the locations under `CLAUSE-DPA-4.2` is `api/loan_applications.py:20`, the same line as R-1 on PR #1.
 
 #### Phase 4a. A workspace MCP server for coding assistants (3–4 days)
+
+> **Status (#37):** `POST /mcp` works with the 2025-06-18 `initialize` handshake (not yet 2026-07-28), personal access tokens created on the "Coding assistants" page, and the tools `list_rules`, `check_changes`, `explain_finding`, `request_exception` and `search_obligations`, plus the `check-before-commit` prompt. Origin check, 60 calls a minute per token, and the `mcp_calls` log are in place. Kiro used it on October 30: `check_changes` found a new R-1 log line, passed after the fix, and agreed with the PR check. Not built: `suggest_fix`, OAuth.
 
 Developers should get the PR check's answer before they push. One endpoint serves every assistant.
 
