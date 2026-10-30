@@ -310,4 +310,62 @@ CREATE TABLE ai_calls (
 CREATE INDEX ai_calls_workspace_time ON ai_calls(workspace_id, created_at);
 `,
   },
+  {
+    id: 4,
+    name: 'password sign-in, assistant tokens, MCP call log, exception details',
+    sql: `
+-- Password sign-in (scrypt hashes) for workspaces that don't use an identity provider.
+ALTER TABLE users ADD COLUMN password_hash TEXT;
+ALTER TABLE users ADD COLUMN github_login TEXT;
+ALTER TABLE users ADD COLUMN title TEXT;
+CREATE UNIQUE INDEX users_github_login ON users(lower(github_login)) WHERE github_login IS NOT NULL;
+
+ALTER TABLE workspaces ADD COLUMN plan TEXT NOT NULL DEFAULT 'pilot';
+ALTER TABLE workspaces ADD COLUMN archived_at TEXT;
+
+-- Personal access tokens for coding assistants (MCP). Only the SHA-256 is stored.
+CREATE TABLE api_tokens (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  token_sha256 TEXT UNIQUE NOT NULL,
+  token_hint TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  last_used_at TEXT,
+  last_client TEXT,
+  revoked_at TEXT
+);
+CREATE INDEX api_tokens_workspace ON api_tokens(workspace_id);
+
+-- What coding assistants asked LexCompiler. File contents are never stored.
+CREATE TABLE mcp_calls (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  token_id TEXT REFERENCES api_tokens(id) ON DELETE SET NULL,
+  user_id TEXT,
+  client TEXT,
+  method TEXT NOT NULL,
+  tool TEXT,
+  repo TEXT,
+  outcome TEXT NOT NULL,
+  summary TEXT,
+  duration_ms INTEGER NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX mcp_calls_workspace_time ON mcp_calls(workspace_id, created_at);
+
+-- What an exception covers, copied from the finding when it was requested.
+ALTER TABLE exceptions ADD COLUMN rule_key TEXT;
+ALTER TABLE exceptions ADD COLUMN scan_id TEXT;
+ALTER TABLE exceptions ADD COLUMN pr_number INTEGER;
+ALTER TABLE exceptions ADD COLUMN file_path TEXT;
+ALTER TABLE exceptions ADD COLUMN start_line INTEGER;
+ALTER TABLE exceptions ADD COLUMN message TEXT;
+ALTER TABLE exceptions ADD COLUMN requester_label TEXT;
+CREATE INDEX exceptions_workspace_status ON exceptions(workspace_id, status);
+CREATE INDEX scans_check_run ON scans(check_run_id);
+`,
+  },
 ];

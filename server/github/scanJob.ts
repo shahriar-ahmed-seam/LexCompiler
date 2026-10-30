@@ -1,6 +1,8 @@
 import type { JobHandler } from '../jobs/queue.js';
 import { classifyFindings, globMatch, scanFiles, type RawFinding } from '../product/scanner.js';
-import { rulesetSha256, type ProductStore, type Repo, type RuleInEffect, type ScanTrigger } from '../product/store.js';
+import type { GovernanceStore } from '../product/governance.js';
+import { rulesetSha256, type ProductStore, type Repo, type RuleInEffect, type ScanRecord, type ScanTrigger } from '../product/store.js';
+import type { ClassifiedFinding } from '../product/scanner.js';
 import { summarizeFindings } from '../product/summary.js';
 import { lexcompilerVersion } from '../util/versions.js';
 import { CHECK_NAME, checkConclusion, chunk, renderCheckOutput, type CheckKind } from './checkRun.js';
@@ -24,6 +26,10 @@ export interface ScanJobDeps {
   store: ProductStore;
   getApp: () => GitHubApp | null;
   publicUrl: string;
+  /** Exceptions, for the waived findings in the check summary. */
+  gov?: GovernanceStore;
+  /** Writes the scan's signed evidence record. */
+  recordEvidence?: (scan: ScanRecord, findings: ClassifiedFinding[], checkRunUrl: string) => { seq: number; headerSha256: string } | null;
 }
 
 interface CommitScan {
@@ -98,7 +104,7 @@ export function createScanJobHandler(deps: ScanJobDeps): JobHandler {
       lexcompilerVersion: version,
       jobId: ctx.jobId,
     });
-    const detailsUrl = `${deps.publicUrl}/scans/${scan.id}`;
+    const detailsUrl = `${deps.publicUrl}/app/checks/${scan.id}`;
     let checkRunId: number | null = null;
     let stored = false;
     try {
@@ -138,8 +144,19 @@ export function createScanJobHandler(deps: ScanJobDeps): JobHandler {
       const findings = classifyFindings(head.findings, base, deps.store.activeExceptions(repo.workspaceId, repo.id));
       const summary = summarizeFindings(findings, head.undecidedRuleKeys);
       const conclusion = checkConclusion(p.kind, summary);
-      deps.store.completeScan(scan.id, { conclusion, filesScanned: head.filesScanned, summary, facts: head.facts, findings });
+      const completed = deps.store.completeScan(scan.id, { conclusion, filesScanned: head.filesScanned, summary, facts: head.facts, findings });
       stored = true;
+      let evidence: { seq: number; headerSha256: string } | null = null;
+      try {
+        evidence = deps.recordEvidence?.(completed, findings, `${app.urls.webUrl}/${repo.fullName}/runs/${run.id}`) ?? null;
+      } catch (err) {
+        console.error(`[evidence] scan ${scan.id}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      const waivers: Record<string, { expiresAt: string | null; reason: string; decidedBy: string | null }> = {};
+      for (const f of findings) {
+        const e = f.exceptionId && deps.gov ? deps.gov.getException(repo.workspaceId, f.exceptionId) : undefined;
+        if (e) waivers[e.id] = { expiresAt: e.expiresAt, reason: e.decisionNote || e.reason, decidedBy: e.decidedByName };
+      }
 
       const output = renderCheckOutput({
         kind: p.kind,
@@ -151,6 +168,8 @@ export function createScanJobHandler(deps: ScanJobDeps): JobHandler {
         filesScanned: head.filesScanned,
         truncated: head.truncated,
         lexcompilerVersion: version,
+        waivers,
+        evidence,
       });
       const [first = [], ...rest] = chunk(output.annotations, 50);
       await app.request(installationId, 'PATCH', `${route}/check-runs/${run.id}`, {
@@ -159,6 +178,11 @@ export function createScanJobHandler(deps: ScanJobDeps): JobHandler {
         completed_at: nowIso(),
         details_url: detailsUrl,
         output: { title: output.title, summary: output.summary, annotations: first },
+        // GitHub shows these as buttons on the check run; a click arrives as check_run.requested_action.
+        actions:
+          p.kind === 'pull_request' && summary.newCount > 0
+            ? [{ label: 'Request exception', description: 'Ask Legal to approve an exception', identifier: 'request_exception' }]
+            : [],
       });
       for (const batch of rest) {
         await app.request(installationId, 'PATCH', `${route}/check-runs/${run.id}`, { output: { title: output.title, summary: output.summary, annotations: batch } });

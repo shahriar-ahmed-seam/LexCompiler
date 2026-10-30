@@ -1,10 +1,18 @@
 import {
   FRAMEWORK_DISPLAY_NAMES,
-  compileLegalProseToFormalPolicy,
+  compileFromBounds,
+  extractDeonticBoundsFromProse,
   getInitialClauses,
   inferRuleCategoryFromProse,
 } from '../compiler/legalCompiler.js';
 import type { ComplianceFrameworkId, LegalClause, RuleCategory } from '../../shared/types.js';
+
+/** Numbers Legal set or confirmed on the rule card; they replace what the parser read. */
+export interface ClauseValues {
+  maxRetentionHours?: number;
+  maxBreachNotificationHours?: number;
+  minAiConfidenceThreshold?: number;
+}
 
 export interface ClauseInput {
   text: string;
@@ -13,6 +21,28 @@ export interface ClauseInput {
   citation?: string;
   category?: RuleCategory;
   frameworkId?: ComplianceFrameworkId;
+  values?: ClauseValues;
+}
+
+/** Checks Legal's values: hours between 1 minute and 100 years, confidence between 0 and 1. */
+export function validateClauseValues(values: unknown): ClauseValues {
+  if (values === undefined || values === null) return {};
+  if (typeof values !== 'object' || Array.isArray(values)) throw new Error('values must be an object');
+  const out: ClauseValues = {};
+  for (const [k, v] of Object.entries(values as Record<string, unknown>)) {
+    if (v === null || v === undefined || v === '') continue;
+    const n = Number(v);
+    if (k === 'maxRetentionHours' || k === 'maxBreachNotificationHours') {
+      if (!Number.isFinite(n) || n < 1 / 60 || n > 24 * 365 * 100) throw new Error(`${k} must be between 1 minute and 100 years, in hours`);
+      out[k] = Math.round(n * 1000) / 1000;
+    } else if (k === 'minAiConfidenceThreshold') {
+      if (!Number.isFinite(n) || n <= 0 || n >= 1) throw new Error('minAiConfidenceThreshold must be between 0 and 1');
+      out[k] = n;
+    } else {
+      throw new Error(`unknown value ${k}`);
+    }
+  }
+  return out;
 }
 
 function assemble(input: ClauseInput, category: RuleCategory, compiled: Pick<LegalClause, 'deontic' | 'compiled'>): LegalClause {
@@ -62,10 +92,31 @@ export async function compileClause(input: ClauseInput): Promise<LegalClause> {
   return compileClauseSync(input);
 }
 
-/** Deterministic compile, no LLM: for seeding and tests. */
+/** Deterministic compile, no LLM. Values from the rule card replace the parser's reading. */
 export function compileClauseSync(input: ClauseInput): LegalClause {
   const category = input.category ?? inferRuleCategoryFromProse(input.text);
-  return assemble(input, category, compileLegalProseToFormalPolicy(input.text, category, input.key, input.citation || input.key));
+  const bounds = extractDeonticBoundsFromProse(input.text, category);
+  const v = input.values ?? {};
+  const set: string[] = [];
+  if (v.maxRetentionHours !== undefined) {
+    bounds.maxRetentionHours = v.maxRetentionHours;
+    bounds.maxRetentionDays = Math.round((v.maxRetentionHours / 24) * 1000) / 1000;
+    bounds.temporalHit = true;
+    set.push(`maxRetentionHours=${v.maxRetentionHours}`);
+  }
+  if (v.maxBreachNotificationHours !== undefined) {
+    bounds.maxBreachNotificationHours = v.maxBreachNotificationHours;
+    set.push(`maxBreachNotificationHours=${v.maxBreachNotificationHours}`);
+  }
+  if (v.minAiConfidenceThreshold !== undefined) {
+    bounds.minAiConfidenceThreshold = v.minAiConfidenceThreshold;
+    bounds.confidenceHit = true;
+    set.push(`minAiConfidenceThreshold=${v.minAiConfidenceThreshold}`);
+  }
+  if (set.length > 0) {
+    bounds.provenance = { ...bounds.provenance, method: 'LEGAL_REVIEW', evidence: [...bounds.provenance.evidence, ...set.map((s) => `legal:${s}`)] };
+  }
+  return assemble(input, category, compileFromBounds(bounds, category, input.key, input.citation || input.key));
 }
 
 /** The built-in illustrative clauses, offered as templates in the rule library. */

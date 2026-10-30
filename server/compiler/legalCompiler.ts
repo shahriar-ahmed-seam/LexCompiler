@@ -552,7 +552,7 @@ export async function extractDeonticBoundsWithLlmFallback(
  * 4. Open Policy Agent (OPA / Rego) rules
  * 5. Tree-sitter / AST structural query patterns
  */
-function compileFromBounds(
+export function compileFromBounds(
   bounds: ExtractedDeonticBounds,
   category: RuleCategory,
   clauseId: string,

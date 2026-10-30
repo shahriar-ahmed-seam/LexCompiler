@@ -12,7 +12,7 @@ export interface Principal {
   name?: string;
   globalRole: GlobalRole;
   /** How the caller authenticated. */
-  via: 'api-token' | 'oidc-bearer' | 'oidc-session' | 'loopback';
+  via: 'api-token' | 'oidc-bearer' | 'oidc-session' | 'password-session' | 'loopback';
 }
 
 export interface OidcConfig {

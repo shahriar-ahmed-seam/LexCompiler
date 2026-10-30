@@ -182,6 +182,19 @@ npm run build
 npm start
 ```
 
+### The Web App
+
+`http://localhost:3001` is the product: sign in, then Overview, Rules (the rule card Legal approves), Checks, Exceptions, Evidence (signed log and share links), Coding assistants (personal MCP tokens) and Settings. The original engine screens are at `/lab`.
+
+```bash
+# Demo workspace "FinHealth AI" with four sign-in accounts (passwords go to data/demo-accounts.txt)
+npm run seed:demo -- --demo
+# Email and password sign-in
+LEXCOMPILER_SIGN_IN=password npm run start:tsx
+```
+
+Coding assistants connect to `POST /mcp` with a token from the Coding assistants page. `docs/HANDOFF.md` has the full demo script; `docs/PRODUCT_GUIDE.md` section 5.9 has the configuration for each client.
+
 ### Developer Scripts
 
 | Script | Purpose |

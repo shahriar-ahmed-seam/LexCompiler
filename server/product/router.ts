@@ -4,23 +4,25 @@ import express from 'express';
 import type { NextFunction, Request, Response } from 'express';
 import { readRepositoryFilesAt } from '../analyzer/repoBaseline.js';
 import { AiGateway, localModelConfig, modelForTask } from '../ai/gateway.js';
-import { OidcProvider, type Principal } from '../auth/oidc.js';
+import { OidcProvider, type Principal, type SessionStore } from '../auth/oidc.js';
 import { tokensMatch, type Authenticator } from '../security.js';
 import { lexcompilerVersion } from '../util/versions.js';
 import type { RuleCategory } from '../../shared/types.js';
-import { compileClause, isRuleCategory, libraryTemplates, RULE_CATEGORIES } from './clauses.js';
-import { classifyFindings, scanFiles } from './scanner.js';
+import { compileClause, isRuleCategory, libraryTemplates, RULE_CATEGORIES, validateClauseValues } from './clauses.js';
+import { classifyFindings, scanFiles, type ClassifiedFinding } from './scanner.js';
 import { scanConclusion, summarizeFindings } from './summary.js';
-import { can, ProductStore, StoreError, WORKSPACE_ROLES, type Permission, type User, type WorkspaceRole } from './store.js';
+import { can, ProductStore, StoreError, WORKSPACE_ROLES, type Permission, type Rule, type RuleVersion, type ScanRecord, type User, type WorkspaceRole } from './store.js';
 
-/** Bearer API token (admin), OIDC bearer JWT, or OIDC session cookie. */
-export function createAuthenticator(oidc: OidcProvider, apiToken: string | null): Authenticator {
+/** Bearer API token (admin), OIDC bearer JWT, or a session cookie (OIDC or password sign-in). */
+export function createAuthenticator(oidc: OidcProvider | null, apiToken: string | null, sessions?: SessionStore): Authenticator {
   return async (req) => {
     const auth = req.headers.authorization || '';
     const bearer = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
     if (bearer && apiToken && tokensMatch(apiToken, bearer)) return { sub: 'api-token', globalRole: 'admin', via: 'api-token' };
-    if (bearer) return oidc.principalFromBearer(bearer);
-    return oidc.principalFromSession(OidcProvider.sessionIdFromCookies(req.headers.cookie));
+    if (bearer) return oidc ? oidc.principalFromBearer(bearer) : null;
+    const sid = OidcProvider.sessionIdFromCookies(req.headers.cookie);
+    if (oidc) return oidc.principalFromSession(sid);
+    return sid && sessions ? sessions.get(sid) : null;
   };
 }
 
@@ -38,11 +40,29 @@ const handle = (fn: Handler) => async (req: Request, res: Response) => {
   }
 };
 
+/** Helpers the workspace routes share, handed to `extra`. */
+export interface RouteHelpers {
+  userOf: (res: Response) => User;
+  roleIn: (req: Request, res: Response) => WorkspaceRole | 'admin' | null;
+  need: (permission: Permission) => (req: Request, res: Response, next: NextFunction) => void;
+  isAdmin: (res: Response) => boolean;
+  handle: (fn: Handler) => (req: Request, res: Response) => Promise<void>;
+  wid: (req: Request) => string;
+}
+
 export interface ProductRouterOptions {
   /** Local repositories must live inside this directory. */
   reposRoot: string;
   /** Model calls; defaults to a gateway on the store's database. */
   ai?: AiGateway;
+  /** Called after Legal approves, rejects or retires a rule (evidence, re-checks). */
+  onRuleDecided?: (input: { workspaceId: string; rule: Rule; version?: RuleVersion; decision: 'approved' | 'rejected' | 'retired'; userId: string }) => void;
+  /** Mounts more workspace routes with the same access checks. */
+  extra?: (r: express.Router, helpers: RouteHelpers) => void;
+  /** Email and password sign-in is on (reported by /auth/config). */
+  passwordSignIn?: boolean;
+  /** Called after a scan started from the dashboard finishes (evidence). */
+  onScanCompleted?: (scan: ScanRecord, findings: ClassifiedFinding[]) => void;
 }
 
 /** Sign-in endpoints and the workspace API (members, repositories, rules, scans). */
@@ -77,7 +97,7 @@ export function createProductRouter(store: ProductStore, oidc: OidcProvider | nu
   // ---------------------------------------------------------------- sign-in
 
   r.get('/auth/config', (_req, res) => {
-    res.json({ oidcEnabled: Boolean(oidc), issuer: oidc?.config.issuer ?? null, loginUrl: oidc ? '/api/auth/login' : null });
+    res.json({ oidcEnabled: Boolean(oidc), passwordSignIn: Boolean(options.passwordSignIn), issuer: oidc?.config.issuer ?? null, loginUrl: oidc ? '/api/auth/login' : null });
   });
   if (oidc) {
     r.get('/auth/login', async (req, res) => {
@@ -168,6 +188,8 @@ export function createProductRouter(store: ProductStore, oidc: OidcProvider | nu
     const cloud = modelForTask('drafting', 'cloud');
     return {
       ...settings,
+      // The server can cap every workspace (LEXCOMPILER_AI_MAX_DAILY_TOKENS).
+      dailyTokenBudget: ai.effectiveBudget(workspaceId),
       tokensUsedToday: ai.tokensUsedToday(workspaceId),
       // The models each mode would use, so the owner sees where contract text goes.
       models: { local: localModelConfig().label, cloud: cloud ? cloud.label : null },
@@ -236,6 +258,12 @@ export function createProductRouter(store: ProductStore, oidc: OidcProvider | nu
       if (category !== undefined && !isRuleCategory(category)) throw new StoreError(`category must be one of ${RULE_CATEGORIES.join(', ')}`);
       const documentId = req.body?.documentId ? String(req.body.documentId) : null;
       if (documentId && !store.getDocument(wid(req), documentId)) throw new StoreError('unknown document', 404);
+      let values;
+      try {
+        values = validateClauseValues(req.body?.values);
+      } catch (err) {
+        throw new StoreError((err as Error).message);
+      }
       const clause = await compileClause({
         text,
         key,
@@ -243,6 +271,7 @@ export function createProductRouter(store: ProductStore, oidc: OidcProvider | nu
         citation: req.body?.citation ? String(req.body.citation) : undefined,
         category: category as RuleCategory | undefined,
         frameworkId: req.body?.frameworkId,
+        values,
       });
       const created = store.createRuleDraft({
         workspaceId: wid(req),
@@ -262,26 +291,32 @@ export function createProductRouter(store: ProductStore, oidc: OidcProvider | nu
     handle((req, res) => {
       const effectiveFrom = req.body?.effectiveFrom ? String(req.body.effectiveFrom) : undefined;
       if (effectiveFrom && Number.isNaN(Date.parse(effectiveFrom))) throw new StoreError('effectiveFrom must be a date');
-      res.json(
-        store.approveRuleVersion(wid(req), String(req.params.versionId), userOf(res).id, {
-          effectiveFrom,
-          answers: req.body?.answers && typeof req.body.answers === 'object' ? req.body.answers : undefined,
-          note: req.body?.note ? String(req.body.note).slice(0, 2000) : undefined,
-        })
-      );
+      const approved = store.approveRuleVersion(wid(req), String(req.params.versionId), userOf(res).id, {
+        effectiveFrom,
+        answers: req.body?.answers && typeof req.body.answers === 'object' ? req.body.answers : undefined,
+        note: req.body?.note ? String(req.body.note).slice(0, 2000) : undefined,
+      });
+      options.onRuleDecided?.({ workspaceId: wid(req), rule: store.getRule(wid(req), approved.ruleId)!, version: approved, decision: 'approved', userId: userOf(res).id });
+      res.json(approved);
     })
   );
   r.post(
     '/workspaces/:workspaceId/rule-versions/:versionId/reject',
     need('editRules'),
-    handle((req, res) => res.json(store.rejectRuleVersion(wid(req), String(req.params.versionId), userOf(res).id, String(req.body?.note || ''))))
+    handle((req, res) => {
+      const rejected = store.rejectRuleVersion(wid(req), String(req.params.versionId), userOf(res).id, String(req.body?.note || ''));
+      options.onRuleDecided?.({ workspaceId: wid(req), rule: store.getRule(wid(req), rejected.ruleId)!, version: rejected, decision: 'rejected', userId: userOf(res).id });
+      res.json(rejected);
+    })
   );
   r.post(
     '/workspaces/:workspaceId/rules/:ruleId/retire',
     need('editRules'),
     handle((req, res) => {
       store.retireRule(wid(req), String(req.params.ruleId), userOf(res).id);
-      res.json(store.getRule(wid(req), String(req.params.ruleId)));
+      const rule = store.getRule(wid(req), String(req.params.ruleId))!;
+      options.onRuleDecided?.({ workspaceId: wid(req), rule, decision: 'retired', userId: userOf(res).id });
+      res.json(rule);
     })
   );
   r.get(
@@ -330,6 +365,7 @@ export function createProductRouter(store: ProductStore, oidc: OidcProvider | nu
           facts: result.facts,
           findings,
         });
+        options.onScanCompleted?.(done, findings);
         res.json({ ...done, findings: store.listFindings(scan.id) });
       } catch (err) {
         store.failScan(scan.id, (err as Error).message);
@@ -338,5 +374,6 @@ export function createProductRouter(store: ProductStore, oidc: OidcProvider | nu
     })
   );
 
+  options.extra?.(r, { userOf, roleIn, need, isAdmin, handle, wid });
   return r;
 }

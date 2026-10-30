@@ -51,6 +51,10 @@ export function renderCheckOutput(input: {
   filesScanned: number;
   truncated: boolean;
   lexcompilerVersion: string;
+  /** Approved exceptions behind waived findings, by exception id. */
+  waivers?: Record<string, { expiresAt: string | null; reason: string; decidedBy: string | null }>;
+  /** The signed evidence record of this scan. */
+  evidence?: { seq: number; headerSha256: string } | null;
 }): CheckOutput {
   const { summary: s, kind, defaultBranch } = input;
   const titles = new Map(input.rules.map((r) => [r.ruleKey, r.title]));
@@ -86,8 +90,20 @@ export function renderCheckOutput(input: {
     lines.push('', '### New findings', '');
     for (const f of newFindings.slice(0, 30)) lines.push(`- **${f.ruleKey}** \`${f.filePath}:${f.startLine}\`: ${cell(f.message)}`);
     if (newFindings.length > 30) lines.push(`- …and ${newFindings.length - 30} more`);
+    if (kind === 'pull_request') lines.push('', 'If a finding is acceptable for now, use **Request exception** above: Legal decides in LexCompiler, and the check re-runs.');
+  }
+  const waived = input.findings.filter((f) => f.state === 'waived');
+  if (waived.length > 0) {
+    lines.push('', '### Waived by Legal', '');
+    for (const f of waived.slice(0, 30)) {
+      const w = f.exceptionId ? input.waivers?.[f.exceptionId] : undefined;
+      const until = w?.expiresAt ? ` until ${w.expiresAt.slice(0, 10)}` : '';
+      const by = w?.decidedBy ? `, approved by ${cell(w.decidedBy)}` : '';
+      lines.push(`- **${f.ruleKey}** \`${f.filePath}:${f.startLine}\`: waived${until}${by}.${w?.reason ? ` Reason: ${cell(w.reason)}` : ''}`);
+    }
   }
   lines.push('', `[Open this scan in LexCompiler](${input.detailsUrl})`);
+  if (input.evidence) lines.push('', `Signed evidence record #${input.evidence.seq} · header SHA-256 \`${input.evidence.headerSha256.slice(0, 16)}…\``);
   if (input.truncated) lines.push('', '_This repository has more source files than one scan reads; some files were not checked._');
   lines.push(
     '',

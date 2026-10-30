@@ -16,6 +16,8 @@ export interface WebhookDeps {
   queue: JobQueue;
   /** Deliveries arrive through a relay that re-stringifies JSON (smee.io); see verifyWebhookSignature. */
   relayReencoded?: boolean;
+  /** "Request exception" was clicked on a check run. Returns what happened. */
+  onRequestException?: (input: { checkRunId: number; login: string }) => string;
 }
 
 /**
@@ -134,7 +136,13 @@ function routeEvent(event: string, payload: Obj, deps: WebhookDeps, app: GitHubA
     const subject = obj(event === 'check_run' ? payload.check_run : payload.check_suite);
     const ownerAppId = num(obj(subject.app).id);
     if (ownerAppId !== null && String(ownerAppId) !== app.credentials.appId) return `ignored: another app's ${event}`;
-    if (action === 'requested_action') return 'ignored: check run buttons arrive with exceptions (Phase 4)';
+    if (action === 'requested_action') {
+      const identifier = text(obj(payload.requested_action).identifier);
+      const checkRunId = num(subject.id);
+      if (event !== 'check_run' || identifier !== 'request_exception' || checkRunId === null) return `ignored: action ${identifier ?? 'unknown'}`;
+      if (!deps.onRequestException) return 'ignored: exceptions are not enabled on this server';
+      return deps.onRequestException({ checkRunId, login: text(obj(payload.sender).login) ?? 'unknown' });
+    }
     if (action !== 'rerequested') return `ignored: ${event}.${action}`;
     const headSha = text(subject.head_sha);
     if (!headSha) return `ignored: ${event} without a head commit`;

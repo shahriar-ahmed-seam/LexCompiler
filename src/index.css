@@ -92,3 +92,24 @@
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.24);
 }
+
+/* The product web app (sign-in, workspace, share pages): light, dense, neutral. */
+html.lexc-product {
+  font-size: 15px;
+  color-scheme: light;
+}
+html.lexc-product body,
+html.lexc-product #root {
+  background-color: #fafafa;
+  background-image: none;
+  color: #18181b;
+  letter-spacing: -0.006em;
+}
+html.lexc-product :focus-visible {
+  outline: 2px solid var(--color-indigo-500);
+  outline-offset: 2px;
+}
+html.lexc-product ::selection {
+  background: var(--color-indigo-100);
+  color: var(--color-indigo-950);
+}

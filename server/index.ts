@@ -6,6 +6,14 @@ import { OidcProvider, oidcConfigFromEnv } from './auth/oidc.js';
 import { getDb } from './db/index.js';
 import { createAuthenticator, createProductRouter } from './product/router.js';
 import { databaseSessionStore, ProductStore } from './product/store.js';
+import { GovernanceStore } from './product/governance.js';
+import { EvidenceLog } from './evidence/log.js';
+import { expireExceptions, recordScanEvidence, requestFromCheckRun, ruleDecided, type FlowDeps } from './product/flows.js';
+import { mountWorkspaceRoutes } from './product/workspaceRoutes.js';
+import { createPublicRoutes } from './product/publicRoutes.js';
+import { createWorkspaceMcpHandler } from './mcp/workspaceMcp.js';
+import { createGovernanceJobHandlers } from './github/governanceJobs.js';
+import { getAiGateway } from './ai/gateway.js';
 import { lexcompilerVersion } from './util/versions.js';
 import { GitHubApp, githubUrls } from './github/client.js';
 import { loadGitHubAppCredentials } from './github/credentials.js';
@@ -103,6 +111,8 @@ const securityConfig = resolveServerSecurityConfig();
 assertSafeBindConfig(securityConfig);
 
 const app = express();
+// Behind a local reverse proxy or tunnel (cloudflared, Caddy), take the client address from X-Forwarded-For.
+app.set('trust proxy', 'loopback');
 app.use(
   cors({
     origin: (origin, callback) => callback(null, isOriginAllowed(securityConfig, origin)),
@@ -122,23 +132,76 @@ try {
   console.error(`[github] ${err instanceof Error ? err.message : String(err)}`);
 }
 const getGitHubApp = () => githubApp;
-const jobQueue = new JobQueue(
+const governance = new GovernanceStore(getDb());
+const evidenceLog = new EvidenceLog(getDb());
+const flowDeps: FlowDeps = { store: productStore, gov: governance, evidence: evidenceLog, queue: null, publicUrl };
+const jobQueue: JobQueue = new JobQueue(
   getDb(),
-  { scan: createScanJobHandler({ store: productStore, getApp: getGitHubApp, publicUrl }) },
+  {
+    scan: createScanJobHandler({
+      store: productStore,
+      getApp: getGitHubApp,
+      publicUrl,
+      gov: governance,
+      recordEvidence: (scan, findings, checkRunUrl) => recordScanEvidence(flowDeps, scan, findings, { checkRunUrl }),
+    }),
+    ...createGovernanceJobHandlers({ store: productStore, getApp: getGitHubApp, queue: () => jobQueue }),
+  },
   { onError: (err, job) => console.error(`[jobs] ${job.kind} ${job.id} attempt ${job.attempt} failed: ${err instanceof Error ? err.message : String(err)}`) }
 );
+flowDeps.queue = jobQueue;
 // The webhook needs the raw body to check GitHub's signature, so it is registered before
 // express.json() and the /api guard (GitHub sends no browser headers).
-app.post('/api/github/webhooks', express.raw({ type: () => true, limit: '25mb' }), createWebhookHandler({ store: productStore, getApp: getGitHubApp, queue: jobQueue, relayReencoded: process.env.LEXCOMPILER_GITHUB_WEBHOOK_RELAY === 'smee' }));
+app.post('/api/github/webhooks', express.raw({ type: () => true, limit: '25mb' }), createWebhookHandler({ store: productStore, getApp: getGitHubApp, queue: jobQueue, relayReencoded: process.env.LEXCOMPILER_GITHUB_WEBHOOK_RELAY === 'smee', onRequestException: (input) => requestFromCheckRun(flowDeps, input) }));
 app.use(express.json({ limit: '5mb' }));
+// Auditor share pages and public keys: no account, the share token is the credential.
+app.use(createPublicRoutes({ store: productStore, gov: governance, evidence: evidenceLog }));
+// The workspace MCP server for coding assistants; personal access tokens, not cookies.
+app.post('/mcp', createWorkspaceMcpHandler({ store: productStore, gov: governance, flows: flowDeps, getApp: getGitHubApp, allowedOrigins: securityConfig.allowedOrigins }));
+app.all('/mcp', (_req, res) => {
+  res.setHeader('Allow', 'POST');
+  res.status(405).json({ error: 'Send MCP messages with POST; this server opens no event stream.' });
+});
 const oidcProvider = oidcConfig ? new OidcProvider(oidcConfig, databaseSessionStore(productStore)) : null;
 // Expired sessions are also dropped when read; this keeps the table small.
 productStore.purgeExpiredSessions();
 setInterval(() => productStore.purgeExpiredSessions(), 60 * 60 * 1000).unref();
 // Resolve the build id once at startup (one git call), not on the first scan request.
 lexcompilerVersion();
-app.use('/api', createApiGuard(securityConfig, oidcProvider ? createAuthenticator(oidcProvider, securityConfig.apiToken) : undefined));
-app.use('/api', createProductRouter(productStore, oidcProvider, { reposRoot: process.env.LEXCOMPILER_PROJECT_REPOS_ROOT || path.join(process.cwd(), 'repos') }));
+const sessionStore = databaseSessionStore(productStore);
+const signInRequired = Boolean(oidcProvider) || securityConfig.passwordSignIn;
+app.use('/api', createApiGuard(securityConfig, signInRequired ? createAuthenticator(oidcProvider, securityConfig.apiToken, sessionStore) : undefined));
+app.use(
+  '/api',
+  createProductRouter(productStore, oidcProvider, {
+    reposRoot: process.env.LEXCOMPILER_PROJECT_REPOS_ROOT || path.join(process.cwd(), 'repos'),
+    ai: getAiGateway(),
+    passwordSignIn: securityConfig.passwordSignIn,
+    onRuleDecided: (input) => ruleDecided(flowDeps, input),
+    onScanCompleted: (scan, findings) => recordScanEvidence(flowDeps, scan, findings),
+    extra: (r, helpers) =>
+      mountWorkspaceRoutes(r, helpers, {
+        store: productStore,
+        gov: governance,
+        evidence: evidenceLog,
+        ai: getAiGateway(),
+        flows: flowDeps,
+        publicUrl,
+        passwordSignIn: securityConfig.passwordSignIn,
+        secureCookies: publicUrl.startsWith('https://'),
+      }),
+  })
+);
+// Approved exceptions past their date expire, and affected pull requests are re-checked.
+const sweepExceptions = () => {
+  try {
+    expireExceptions(flowDeps);
+  } catch (err) {
+    console.error(`[exceptions] ${err instanceof Error ? err.message : String(err)}`);
+  }
+};
+sweepExceptions();
+setInterval(sweepExceptions, 10 * 60 * 1000).unref();
 app.use('/api', createGitHubApiRouter(getGitHubApp));
 
 /**
@@ -1108,7 +1171,7 @@ app.use(
     onRegistered: (credentials) => {
       githubApp = new GitHubApp(credentials, ghUrls);
     },
-    auth: createBrowserAuth(oidcProvider),
+    auth: createBrowserAuth(oidcProvider, { sessions: sessionStore, signInRequired }),
     publicUrl,
     urls: ghUrls,
     webhookUrl: process.env.LEXCOMPILER_GITHUB_WEBHOOK_URL || `${publicUrl}/api/github/webhooks`,
@@ -1133,6 +1196,6 @@ jobQueue.start();
 app.listen(securityConfig.port, securityConfig.host, () => {
   console.log(
     `[LexCompiler Server] Neuro-Symbolic Law-to-AST Engine listening on http://${securityConfig.host}:${securityConfig.port}` +
-      (securityConfig.apiToken ? ' (API token required)' : ' (loopback only)')
+      (signInRequired ? ` (sign-in required: ${oidcProvider ? 'OIDC' : 'email and password'})` : securityConfig.apiToken ? ' (API token required)' : ' (loopback only)')
   );
 });

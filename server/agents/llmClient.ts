@@ -14,6 +14,11 @@ export interface LlmConfig {
   apiKey?: string;
   /** Display name for reports, e.g. "DeepSeek-V3 via api.deepseek.com". */
   label?: string;
+  /**
+   * How to ask for JSON on OpenAI-compatible APIs: `schema` (response_format json_schema),
+   * `object` (json_object, for providers without schemas such as DeepSeek) or `none`.
+   */
+  jsonMode?: 'schema' | 'object' | 'none';
 }
 
 export interface ToolSpec {
@@ -59,7 +64,9 @@ export function llmConfigFor(agentId: string | null, env: NodeJS.ProcessEnv = pr
   const provider = (pick('PROVIDER') || 'openai') as Provider;
   if (provider !== 'openai' && provider !== 'anthropic') throw new Error(`Unknown LLM provider ${provider}`);
   const baseUrl = (pick('BASE_URL') || DEFAULT_BASE[provider]).replace(/\/$/, '');
-  return { provider, model, baseUrl, apiKey: pick('API_KEY') || undefined, label: `${model} via ${new URL(baseUrl).host}` };
+  const mode = pick('JSON_MODE');
+  const jsonMode = mode === 'schema' || mode === 'object' || mode === 'none' ? mode : new URL(baseUrl).hostname.endsWith('deepseek.com') ? 'object' : 'schema';
+  return { provider, model, baseUrl, apiKey: pick('API_KEY') || undefined, label: `${model} via ${new URL(baseUrl).host}`, jsonMode };
 }
 
 export async function chat(cfg: LlmConfig, messages: ChatMessage[], tools: ToolSpec[], opts: { jsonSchema?: Record<string, unknown>; maxTokens?: number; timeoutMs?: number } = {}): Promise<ChatResult> {
@@ -84,7 +91,9 @@ async function chatOpenAi(cfg: LlmConfig, messages: ChatMessage[], tools: ToolSp
   );
   const body: Record<string, unknown> = { model: cfg.model, messages: wire, max_tokens: opts.maxTokens ?? 1024, temperature: 0 };
   if (tools.length) body.tools = tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.inputSchema } }));
-  if (opts.jsonSchema && !tools.length) body.response_format = { type: 'json_schema', json_schema: { name: 'result', schema: opts.jsonSchema, strict: false } };
+  if (opts.jsonSchema && !tools.length && cfg.jsonMode !== 'none') {
+    body.response_format = cfg.jsonMode === 'object' ? { type: 'json_object' } : { type: 'json_schema', json_schema: { name: 'result', schema: opts.jsonSchema, strict: false } };
+  }
   const out = await post(`${cfg.baseUrl}/chat/completions`, cfg.apiKey ? { Authorization: `Bearer ${cfg.apiKey}` } : {}, body, signal);
   const choice = ((out.choices as unknown[]) || [])[0] as { message?: { content?: string | null; tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }> }; finish_reason?: string } | undefined;
   const u = (out.usage || {}) as { prompt_tokens?: number; completion_tokens?: number; prompt_tokens_details?: { cached_tokens?: number }; prompt_cache_hit_tokens?: number };

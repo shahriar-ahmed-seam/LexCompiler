@@ -228,18 +228,18 @@ export class ProductStore {
   }
 
   findWorkspaceByName(name: string): Workspace | undefined {
-    const r = this.db.prepare('SELECT id FROM workspaces WHERE name = ? ORDER BY created_at LIMIT 1').get(name) as Row | undefined;
+    const r = this.db.prepare('SELECT id FROM workspaces WHERE name = ? AND archived_at IS NULL ORDER BY created_at LIMIT 1').get(name) as Row | undefined;
     return r ? this.getWorkspace(String(r.id)) : undefined;
   }
 
   listWorkspaces(): Workspace[] {
-    return (this.db.prepare('SELECT id FROM workspaces ORDER BY created_at').all() as Row[]).map((r) => this.getWorkspace(String(r.id))!);
+    return (this.db.prepare('SELECT id FROM workspaces WHERE archived_at IS NULL ORDER BY created_at').all() as Row[]).map((r) => this.getWorkspace(String(r.id))!);
   }
 
   listWorkspacesForUser(userId: string): Array<Workspace & { role: WorkspaceRole }> {
     const rows = this.db
       .prepare(
-        'SELECT w.id, m.role FROM workspaces w JOIN memberships m ON m.workspace_id = w.id WHERE m.user_id = ? ORDER BY w.created_at'
+        'SELECT w.id, m.role FROM workspaces w JOIN memberships m ON m.workspace_id = w.id WHERE m.user_id = ? AND w.archived_at IS NULL ORDER BY w.created_at'
       )
       .all(userId) as Row[];
     return rows.map((r) => ({ ...this.getWorkspace(String(r.id))!, role: r.role as WorkspaceRole }));

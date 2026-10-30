@@ -349,7 +349,7 @@ describe('GitHub App', () => {
     expect(patch.output.annotations.filter((a) => a.annotation_level === 'warning')).toHaveLength(6);
     // The baseline was reused from the default-branch scan, not downloaded again.
     expect(fake.tarballRequests).toEqual([BASE, HEAD1]);
-    expect(lastRun().create.details_url).toMatch(/^http:\/\/lexc\.test\/scans\/[0-9a-f-]{36}$/);
+    expect(lastRun().create.details_url).toMatch(/^http:\/\/lexc\.test\/app\/checks\/[0-9a-f-]{36}$/);
   });
 
   it('re-checks a pushed fix and a re-run request', async () => {
@@ -372,12 +372,15 @@ describe('GitHub App', () => {
     expect(await queue.drain()).toBe(0);
   });
 
-  it('shows a scan only to members of its workspace', async () => {
+  it('links check runs to the scan page in the web app', async () => {
     const url = new URL(String(lastRun().create.details_url));
-    const page = await browse(url.pathname);
-    expect(page.status).toBe(200);
-    expect(await page.text()).toContain('api/loan_applications.py:20');
-    expect((await browse(url.pathname, 'stranger')).status).toBe(404);
+    const scanId = url.pathname.split('/').pop()!;
+    expect(url.pathname).toBe(`/app/checks/${scanId}`);
+    // Older check runs link to /scans/<id>, which now redirects there. Access is checked by the API.
+    const old = await browse(`/scans/${scanId}`);
+    expect(old.status).toBe(302);
+    expect(old.headers.get('location')).toBe(`/app/checks/${scanId}`);
+    expect(store.listFindings(scanId).some((f) => f.filePath === 'api/loan_applications.py' && f.startLine === 20)).toBe(true);
   });
 
   it('retries a dropped download inside one attempt', async () => {
