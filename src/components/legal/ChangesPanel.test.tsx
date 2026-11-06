@@ -63,9 +63,9 @@ describe('ChangesPanel', () => {
     expect(coming.textContent).toContain('takes effect on 1 January 2027');
     expect(coming.textContent).toContain('services/ai_credit_triage.ts:20');
 
-    // A change notice has nothing to compile; a text item can be drafted.
+    // A change notice has nothing to compile (only its text can be fetched); a text item can be drafted.
     const notice = screen.getByRole('listitem', { name: 'Feed item 32026R0999' });
-    expect(within(notice).queryByRole('button')).toBeNull();
+    expect(within(notice).queryByRole('button', { name: /Draft rule change/ })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Draft rule change from 2026-21001' }));
     expect((await screen.findByRole('status')).textContent).toContain('R-5 v1 drafted from 2026-21001. Nothing takes effect until it is approved.');
     expect(onChanged).toHaveBeenCalled();
@@ -91,6 +91,24 @@ describe('ChangesPanel', () => {
     fireEvent.change(paths, { target: { value: 'other/repo: **' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save paths for Nodi Microfinance' }));
     expect(screen.getByText(/write "repository: path glob"/)).toBeTruthy();
+  });
+});
+
+describe('Fetch the act text', () => {
+  it('fetches the amended act for a change notice and opens the new document', async () => {
+    const calls = stubApi({ [`${BASE}/feed/EUR_LEX%3A32026R0999/fetch-text`]: { id: 'doc-9', clauses: [] } });
+    const onOpenDocument = vi.fn(async () => undefined);
+    render(<ChangesPanel base={BASE} canEdit onChanged={async () => undefined} onOpenDocument={onOpenDocument} />);
+    fireEvent.click(await screen.findByRole('button', { name: "Fetch the act's text for 32026R0999" }));
+    await waitFor(() => expect(onOpenDocument).toHaveBeenCalledWith('doc-9'));
+    expect(calls.some((c) => c.url === `${BASE}/feed/EUR_LEX%3A32026R0999/fetch-text`)).toBe(true);
+  });
+
+  it('is not offered to roles that cannot edit rules', async () => {
+    stubApi();
+    render(<ChangesPanel base={BASE} canEdit={false} onChanged={async () => undefined} />);
+    await screen.findByRole('listitem', { name: 'Feed item 32026R0999' });
+    expect(screen.queryByRole('button', { name: /Fetch the act's text/ })).toBeNull();
   });
 });
 

@@ -1474,8 +1474,8 @@ export class ProductStore {
     return this.listFeedItems(workspaceId, 500).find((i) => i.id === id);
   }
 
-  /** Links a document to the feed item it was made from. */
-  linkDocumentToFeedItem(workspaceId: string, documentId: string, feedItemId: string, sourceUrl: string | null): void {
+  /** Links a document to the feed item it was made from (or, with no item, to the page it was imported from). */
+  linkDocumentToFeedItem(workspaceId: string, documentId: string, feedItemId: string | null, sourceUrl: string | null): void {
     this.db.prepare('UPDATE documents SET feed_item_id = ?, source_url = ? WHERE id = ? AND workspace_id = ?').run(feedItemId, sourceUrl, documentId, workspaceId);
   }
 

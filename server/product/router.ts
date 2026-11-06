@@ -12,6 +12,7 @@ import type { EvidenceRecorder } from '../evidence/records.js';
 import type { TargetRepoFile } from '../../shared/types.js';
 import type { CrewRun, CrewRunStore } from '../agents/crew.js';
 import { watchRegulationFeed } from './regulationWatch.js';
+import { fetchActText, fetchUrlText, type ActTextDeps } from '../regulations/actText.js';
 import { scanLocalRepo, storeComingUp } from './repoScan.js';
 import type { RuleCategory } from '../../shared/types.js';
 import { compileClause, isRuleCategory, libraryTemplates, RULE_CATEGORIES, validateClauseValues } from './clauses.js';
@@ -95,6 +96,8 @@ export interface ProductRouterOptions {
   readRepoFiles?: (repo: Repo, commitSha: string) => Promise<TargetRepoFile[]>;
   /** Fetches the regulation feed and stores new items; returns how many were new. */
   refreshFeed?: () => Promise<number>;
+  /** Fetch and Browserbase key for "Fetch the act's text" and "Import from URL" (tests inject fetch). */
+  actText?: ActTextDeps;
   /** Opens a verified fix pull request for a GitHub repository's default branch (Phase 4). */
   openFixPr?: (repo: Repo, requestedBy: string) => Promise<{ created: boolean }>;
   /** The agent crew on a workspace repository (server/agents/workspaceCrew.ts). */
@@ -767,6 +770,55 @@ export function createProductRouter(store: ProductStore, oidc: OidcProvider | nu
       req.body = { citation: `${item.source === 'EUR_LEX' ? 'EUR-Lex' : 'Federal Register'} ${item.documentNumber}`, title: item.title.slice(0, 200), ...(req.body ?? {}) };
       const created = await draftFromText(req, res, item.excerpt.trim(), documentId);
       res.status(201).json({ ...created, documentId, feedItemId: item.id });
+    })
+  );
+
+  /**
+   * "Fetch the act's text": the amended act's full text from its official source (EUR-Lex's Cellar
+   * interface or the Federal Register API), stored as a regulation document linked to the item.
+   * Idempotent: an item that already has a document returns it.
+   */
+  r.post(
+    '/workspaces/:workspaceId/feed/:itemId/fetch-text',
+    need('editRules'),
+    handle(async (req, res) => {
+      const item = store.getFeedItem(wid(req), String(req.params.itemId));
+      if (!item) throw new StoreError('unknown feed item', 404);
+      if (item.documentId) {
+        const existing = store.getDocument(wid(req), item.documentId);
+        if (existing) return res.json({ ...existing, clauses: splitClauses(existing.text) });
+      }
+      const act = await fetchActText(item, options.actText);
+      const doc = store.addDocument({ workspaceId: wid(req), kind: 'regulation', title: act.title, language: 'en', text: act.text, uploadedBy: userOf(res).id });
+      store.linkDocumentToFeedItem(wid(req), doc.id, item.id, act.sourceUrl);
+      res.status(201).json({ ...store.getDocument(wid(req), doc.id), clauses: splitClauses(act.text) });
+    })
+  );
+  /** Which optional integrations this server has (the workspace shows "Import from URL" only with Browserbase). */
+  r.get('/workspaces/:workspaceId/integrations', need('view'), (_req, res) => {
+    const key = options.actText?.browserbaseKey === undefined ? process.env.BROWSERBASE_API_KEY : options.actText.browserbaseKey;
+    res.json({ browserbase: Boolean(key) });
+  });
+  /** "Import from URL": { url, title?, kind?, counterpartyId?, language? }; a public page through Browserbase Fetch. */
+  r.post(
+    '/workspaces/:workspaceId/documents/from-url',
+    need('editRules'),
+    handle(async (req, res) => {
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const kind = String(body.kind || 'regulation');
+      if (!['contract', 'regulation', 'policy'].includes(kind)) throw new StoreError('kind must be contract, regulation or policy');
+      const page = await fetchUrlText(String(body.url || ''), options.actText);
+      const doc = store.addDocument({
+        workspaceId: wid(req),
+        counterpartyId: body.counterpartyId ? String(body.counterpartyId) : null,
+        kind: kind as 'contract' | 'regulation' | 'policy',
+        title: String(body.title || page.title),
+        language: body.language ? String(body.language).slice(0, 10) : null,
+        text: page.text,
+        uploadedBy: userOf(res).id,
+      });
+      store.linkDocumentToFeedItem(wid(req), doc.id, null, page.sourceUrl);
+      res.status(201).json({ ...store.getDocument(wid(req), doc.id), clauses: splitClauses(page.text) });
     })
   );
 

@@ -220,6 +220,8 @@ export function LegalWorkspace() {
   const [upLanguage, setUpLanguage] = useState('en');
   const [upText, setUpText] = useState('');
   const [upFile, setUpFile] = useState<File | null>(null);
+  const [upUrl, setUpUrl] = useState('');
+  const [browserbase, setBrowserbase] = useState(false);
 
   const ws = workspaces.find((w) => w.id === workspaceId);
   const base = `/api/workspaces/${workspaceId}`;
@@ -256,6 +258,8 @@ export function LegalWorkspace() {
     setCounterparties(cps);
     setRules(rs);
     setInbox(box);
+    // Older servers have no such route; the URL import then stays hidden.
+    setBrowserbase(Boolean((await api<{ browserbase?: boolean }>(`${base}/integrations`).catch(() => null))?.browserbase));
   }, [base, workspaceId]);
   useEffect(() => {
     void run(refresh);
@@ -283,6 +287,18 @@ export function LegalWorkspace() {
       setUpFile(null);
       setUpTitle('');
       setMessage({ kind: 'ok', text: `Uploaded. ${doc.clauses.filter((c) => c.normative).length} of ${doc.clauses.length} clauses are normative.` });
+    });
+
+  const importFromUrl = () =>
+    run(async () => {
+      const doc = await api<{ id: string; clauses: Clause[] }>(`${base}/documents/from-url`, { url: upUrl.trim(), title: upTitle || undefined, kind: upKind, language: upLanguage, counterpartyId: upCounterparty || undefined });
+      await refresh();
+      setDocId(doc.id);
+      setClauses(doc.clauses);
+      setClause(null);
+      setCard(null);
+      setUpUrl('');
+      setMessage({ kind: 'ok', text: `Imported. ${doc.clauses.filter((c) => c.normative).length} of ${doc.clauses.length} clauses are normative.` });
     });
 
   const requestCard = useCallback(
@@ -457,6 +473,17 @@ export function LegalWorkspace() {
               <button type="submit" disabled={busy || (!upFile && !upText.trim())} className="w-full rounded bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5 text-sm flex items-center justify-center gap-2 disabled:opacity-50">
                 <Upload className="w-4 h-4" aria-hidden /> Upload
               </button>
+              {browserbase && (
+                <div className="space-y-2 border-t border-zinc-800 pt-2">
+                  <label className="block text-xs text-zinc-300">
+                    …or import from a URL
+                    <input type="url" placeholder="https://" className="mt-1 w-full bg-[#0B101B] border border-zinc-700 rounded px-2 py-1 text-sm" value={upUrl} onChange={(e) => setUpUrl(e.target.value)} />
+                  </label>
+                  <button type="button" disabled={busy || !upUrl.trim()} onClick={() => void importFromUrl()} className="w-full rounded bg-zinc-700 hover:bg-zinc-800 text-white px-3 py-1.5 text-sm disabled:opacity-50">
+                    Import from URL
+                  </button>
+                </div>
+              )}
             </form>
           )}
         </section>
@@ -721,6 +748,7 @@ export function LegalWorkspace() {
               key={`changes-${workspaceId}`}
               base={base}
               canEdit={Boolean(canEdit)}
+              onOpenDocument={openDocument}
               canOpenFixes={Boolean(ws && ['owner', 'legal', 'engineer', 'admin'].includes(ws.role))}
               onChanged={refresh}
             />
