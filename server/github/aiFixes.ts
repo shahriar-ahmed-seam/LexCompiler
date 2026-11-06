@@ -4,12 +4,14 @@ import { scanFilesScoped, type ClassifiedFinding } from '../product/scanner.js';
 import type { RuleInEffect } from '../product/store.js';
 import type { TargetRepoFile } from '../../shared/types.js';
 import type { Suggestion } from './fixes.js';
+import { undefinedCalls } from './fixNames.js';
 
 /**
  * Model-written fixes (product guide, 5.5 item 2), for new findings that have no template fix.
  * The model sees only the finding's lines and the rule text, and only when the workspace's owner
  * chose a cloud provider. Its replacement is applied to an in-memory copy and kept only when the
- * file still parses, the rule no longer fails in that file (Z3), and the rescan finds nothing new.
+ * file still parses, it calls only names the repository defines, the rule no longer fails in that file
+ * (Z3), and the rescan finds nothing new.
  * Discarded patches are logged with the reason. Results are suggestions; nothing is committed.
  */
 
@@ -74,7 +76,8 @@ export async function aiSuggestionsFor(input: {
     const { replacement, note } = r.json as { replacement: string; note: string };
     const replacementLines = replacement.replace(/\r\n/g, '\n').replace(/\n$/, '').split('\n');
     const patched: TargetRepoFile = { ...file, content: [...lines.slice(0, start - 1), ...replacementLines, ...lines.slice(end)].join('\n') };
-    const why = await check(patched, input, rule, f, before);
+    const missing = undefinedCalls(patched, replacementLines, input.files);
+    const why = missing.length ? `it calls ${missing.join(', ')}, which nothing in the repository defines` : await check(patched, input, rule, f, before);
     if (why) {
       log(`${r.model} patch for ${f.ruleKey} at ${f.filePath}:${start} discarded: ${why}`);
       continue;
@@ -94,7 +97,7 @@ export async function aiSuggestionsFor(input: {
         ...replacementLines,
         '```',
         '',
-        `_AI-suggested fix (${r.model}): ${note.slice(0, 300)} LexCompiler checked it: the file parses, Z3 no longer finds ${f.ruleKey} in it, and the rescan finds nothing new._`,
+        `_AI-suggested fix (${r.model}): ${note.slice(0, 300)} LexCompiler checked it: the file parses, it calls only names the repository defines, Z3 no longer finds ${f.ruleKey} in it, and the rescan finds nothing new._`,
       ].join('\n'),
     });
   }
