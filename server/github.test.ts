@@ -425,7 +425,7 @@ describe('GitHub App', { timeout: 120_000 }, () => {
     expect(patch.output.annotations.filter((a) => a.annotation_level === 'warning')).toHaveLength(6);
     // The baseline was reused from the default-branch scan, not downloaded again.
     expect(fake.tarballRequests).toEqual([BASE, HEAD1]);
-    expect(lastRun().create.details_url).toMatch(/^http:\/\/lexc\.test\/scans\/[0-9a-f-]{36}$/);
+    expect(lastRun().create.details_url).toMatch(/^http:\/\/lexc\.test\/app\/checks\/[0-9a-f-]{36}$/);
     // The run names the signed evidence record of this scan (guide, Phase 5 test, step 5).
     const scanId = String(lastRun().create.details_url).split('/').pop()!;
     const ev = store.scanEvidence(scanId)!;
@@ -503,12 +503,17 @@ describe('GitHub App', { timeout: 120_000 }, () => {
     expect(await queue.drain()).toBe(0);
   });
 
-  it('shows a scan only to members of its workspace', async () => {
+  it('links check runs to the web app and shows a scan only to members of its workspace', async () => {
     const url = new URL(String(lastRun().create.details_url));
-    const page = await browse(url.pathname);
+    const scanId = url.pathname.split('/').pop()!;
+    expect(url.pathname).toBe(`/app/checks/${scanId}`);
+    // The server-rendered page (what older check runs link to) is member-checked and points to the web app.
+    const page = await browse(`/scans/${scanId}`);
     expect(page.status).toBe(200);
-    expect(await page.text()).toContain('api/loan_applications.py:20');
-    expect((await browse(url.pathname, 'stranger')).status).toBe(404);
+    const html = await page.text();
+    expect(html).toContain('api/loan_applications.py:20');
+    expect(html).toContain(`/app/checks/${scanId}`);
+    expect((await browse(`/scans/${scanId}`, 'stranger')).status).toBe(404);
   });
 
   it('retries a dropped download inside one attempt', async () => {

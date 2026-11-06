@@ -12,7 +12,7 @@ Whichever you use, go through the checklist at the end before anyone else signs 
 | Variable | Why |
 |---|---|
 | `LEXCOMPILER_PUBLIC_URL` | The `https://` address people use. Links in check runs, share links and the MCP URL are built from it. With `https://`, plain HTTP is redirected and HSTS is sent. |
-| `LEXCOMPILER_TRUST_PROXY` | Trust the proxy's `X-Forwarded-*` headers, so the app sees the client's address (rate limits, share view log) and that the request came over HTTPS. `loopback` for a tunnel on the same machine; `1` for Caddy in the compose file. Without it, HTTPS redirects stay off and a warning is logged. |
+| `LEXCOMPILER_TRUST_PROXY` | Trust the proxy's `X-Forwarded-*` headers, so the app sees the client's address (rate limits, share view log) and that the request came over HTTPS. `loopback` for a tunnel on the same machine; `1` for Caddy in the compose file. Without it set explicitly, HTTPS redirects stay off and a warning is logged (the default loopback trust only serves client addresses; a proxy that is not on loopback needs an explicit value). |
 | `HOST` | `0.0.0.0` (or the interface) to listen beyond this machine. The server then refuses to start without `LEXCOMPILER_API_TOKEN` or OIDC, and refuses the runtime sandbox. |
 | `LEXCOMPILER_API_TOKEN`, `LEXCOMPILER_OIDC_*` | A public server needs sign-in or a token. OIDC sessions and the token both pass the `/api` guard. |
 | `LEXCOMPILER_ALLOWED_ORIGINS`, `LEXCOMPILER_ALLOWED_HOSTS` | The public origin and host name. |

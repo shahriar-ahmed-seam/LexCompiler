@@ -23,7 +23,9 @@ export type RuleCategory =
 export type DeonticExtractionMethod =
   | 'DETERMINISTIC_PARSER'
   | 'LLM_JSON_FALLBACK'
-  | 'DETERMINISTIC_DEFAULT';
+  | 'DETERMINISTIC_DEFAULT'
+  /** A value Legal set or confirmed on the rule card. */
+  | 'LEGAL_REVIEW';
 
 export interface DeonticExtractionProvenance {
   method: DeonticExtractionMethod;

@@ -557,7 +557,7 @@ export async function extractDeonticBoundsWithLlmFallback(
  * 4. Open Policy Agent (OPA / Rego) rules
  * 5. Tree-sitter / AST structural query patterns
  */
-function compileFromBounds(
+export function compileFromBounds(
   bounds: ExtractedDeonticBounds,
   category: RuleCategory,
   clauseId: string,
@@ -996,7 +996,16 @@ export function compileLegalProseWithOverrides(
     set.push(`maxBreachNotificationHours=${overrides.maxBreachNotificationHours}`);
   }
   if (set.length > 0) {
-    b.provenance = { ...b.provenance, evidence: [...b.provenance.evidence, `set by Legal on the rule card: ${set.join("; ")}`] };
+    // A value Legal set is a reviewed value, not a parser default: the prover stops asking for review.
+    b.provenance = {
+      ...b.provenance,
+      method: "LEGAL_REVIEW",
+      evidence: [
+        ...b.provenance.evidence,
+        `set by Legal on the rule card: ${set.join("; ")}`,
+        ...set.map((s) => `legal:${s}`),
+      ],
+    };
   }
   return compileFromBounds(b, category, clauseId, citation);
 }

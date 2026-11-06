@@ -37,7 +37,7 @@ export interface ShareView {
   }>;
   /** Findings of the latest scan of each repository's default branch, without code. */
   openFindings: Array<{ repo: string; commit: string; ruleKey: string; filePath: string; startLine: number; state: string; message: string; fingerprint: string }>;
-  exceptions: Array<{ id: string; ruleKey: string; repo: string | null; where: string | null; reason: string; status: string; requestedAt: string; decidedBy: string | null; decidedAt: string | null; decisionNote: string | null; expiresAt: string | null }>;
+  exceptions: Array<{ id: string; ruleKey: string; repo: string | null; where: string | null; pullRequest: number | null; reason: string; status: string; requestedBy: string | null; requestedAt: string; decidedBy: string | null; decidedAt: string | null; decisionNote: string | null; expiresAt: string | null }>;
   evidence: {
     /** Every header of the period, so the auditor can see nothing was removed. */
     headers: Array<{ seq: number; header: string; headerSha256: string; signature: string }>;
@@ -98,8 +98,11 @@ export function buildShareView(store: ProductStore, log: EvidenceLog, share: Sha
       ruleKey: e.ruleKey,
       repo: e.repoName,
       where: e.filePath ? `${e.filePath}:${e.startLine ?? 1}` : e.pathGlob,
+      pullRequest: e.prNumber,
       reason: e.reason,
       status: e.status,
+      // Who asked: the label the request came with (a GitHub login, an assistant), else the person.
+      requestedBy: e.requesterLabel ?? userLabel(store, e.requestedBy),
       requestedAt: e.requestedAt,
       decidedBy: userLabel(store, e.decidedBy),
       decidedAt: e.decidedAt,
@@ -308,6 +311,7 @@ export function createPublicEvidenceRouter(options: PublicEvidenceOptions) {
     const id = String(req.params.workspaceId);
     if (!store.getWorkspace(id)) return void res.status(404).json({ error: 'unknown workspace' });
     res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Cache-Control', 'public, max-age=300');
     res.json(await options.keysFor(id));
   });
   return r;

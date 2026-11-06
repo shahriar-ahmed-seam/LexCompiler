@@ -4,27 +4,32 @@ import express from 'express';
 import type { NextFunction, Request, Response } from 'express';
 import { readRepositoryFilesAt } from '../analyzer/repoBaseline.js';
 import { AiGateway, localModelConfig, modelForTask } from '../ai/gateway.js';
-import { OidcProvider, type Principal } from '../auth/oidc.js';
+import { OidcProvider, type Principal, type SessionStore } from '../auth/oidc.js';
 import { tokensMatch, type Authenticator } from '../security.js';
+import { describeEvidence } from '../evidence/describe.js';
+import type { EvidenceLog, PublicKeyEntry } from '../evidence/log.js';
 import type { EvidenceRecorder } from '../evidence/records.js';
 import type { TargetRepoFile } from '../../shared/types.js';
 import type { CrewRun, CrewRunStore } from '../agents/crew.js';
 import { watchRegulationFeed } from './regulationWatch.js';
 import { scanLocalRepo, storeComingUp } from './repoScan.js';
 import type { RuleCategory } from '../../shared/types.js';
-import { compileClause, isRuleCategory, libraryTemplates, RULE_CATEGORIES } from './clauses.js';
+import { compileClause, isRuleCategory, libraryTemplates, RULE_CATEGORIES, validateClauseValues } from './clauses.js';
 import { DocumentError, extractDocumentText, looksLikeLegacyBangla, MAX_DOCUMENT_BYTES, splitClauses } from './documents.js';
+import { decideException, expireExceptions, requestExceptions, ruleDecided, type FlowDeps } from './flows.js';
 import { buildRuleCard, CATEGORY_LABELS, cleanOverrides, impactPreview, type RuleCard } from './ruleCard.js';
-import { can, ProductStore, StoreError, WORKSPACE_ROLES, type ExceptionRecord, type ExceptionStatus, type Permission, type Repo, type RuleScope, type RuleVersion, type User, type WorkspaceRole } from './store.js';
+import { can, ProductStore, StoreError, WORKSPACE_ROLES, type ExceptionRecord, type ExceptionStatus, type Permission, type Repo, type RuleScope, type RuleVersion, type StoredFinding, type User, type WorkspaceRole } from './store.js';
 
-/** Bearer API token (admin), OIDC bearer JWT, or OIDC session cookie. */
-export function createAuthenticator(oidc: OidcProvider, apiToken: string | null): Authenticator {
+/** Bearer API token (admin), OIDC bearer JWT, or a session cookie (OIDC or password sign-in). */
+export function createAuthenticator(oidc: OidcProvider | null, apiToken: string | null, sessions?: SessionStore): Authenticator {
   return async (req) => {
     const auth = req.headers.authorization || '';
     const bearer = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
     if (bearer && apiToken && tokensMatch(apiToken, bearer)) return { sub: 'api-token', globalRole: 'admin', via: 'api-token' };
-    if (bearer) return oidc.principalFromBearer(bearer);
-    return oidc.principalFromSession(OidcProvider.sessionIdFromCookies(req.headers.cookie));
+    if (bearer) return oidc ? oidc.principalFromBearer(bearer) : null;
+    const sid = OidcProvider.sessionIdFromCookies(req.headers.cookie);
+    if (oidc) return oidc.principalFromSession(sid);
+    return sid && sessions ? sessions.get(sid) : null;
   };
 }
 
@@ -42,6 +47,24 @@ const handle = (fn: Handler) => async (req: Request, res: Response) => {
   }
 };
 
+/** Helpers the workspace routes share, handed to `extra`. */
+export interface RouteHelpers {
+  userOf: (res: Response) => User;
+  roleIn: (req: Request, res: Response) => WorkspaceRole | 'admin' | null;
+  need: (permission: Permission) => (req: Request, res: Response, next: NextFunction) => void;
+  isAdmin: (res: Response) => boolean;
+  handle: (fn: Handler) => (req: Request, res: Response) => Promise<void>;
+  wid: (req: Request) => string;
+  /** The exception and rule lifecycle (requests, decisions, revokes, expiry, re-checks, evidence). */
+  flows: FlowDeps;
+  /** The signed evidence log, when the server records one. */
+  evidence: EvidenceLog | null;
+  /** Every public key that signed a workspace's records (for verification). */
+  keysFor: (workspaceId: string) => Promise<PublicKeyEntry[]>;
+  /** Sign-in is by OIDC (the router then owns /auth/logout). */
+  oidcEnabled: boolean;
+}
+
 export interface ProductRouterOptions {
   /** Local repositories must live inside this directory. */
   reposRoot: string;
@@ -52,12 +75,20 @@ export interface ProductRouterOptions {
    * id (null when an identical scan is already queued). Without it, approval queues nothing.
    */
   enqueueBranchScan?: (repo: Repo, version: RuleVersion) => string | null;
-  /** Re-runs the pull request check an exception was requested on, after Legal decides it. */
+  /**
+   * The exception and rule lifecycle (flows.ts): requests, decisions, revokes, expiry, the
+   * re-check jobs and the comments on pull requests. Without it, nothing is queued and the
+   * evidence goes to `evidence` (tests).
+   */
+  flows?: FlowDeps;
+  /** Overrides the re-check an exception decision queues (tests); it returns the job id. */
   onExceptionDecided?: (exception: ExceptionRecord) => string | null;
-  /** The workspace MCP endpoint, shown on the settings page (default http://localhost:3001/mcp). */
+  /** The workspace MCP endpoint, shown on the settings page (default `<publicUrl>/mcp`). */
   mcpUrl?: string;
   /** Writes the signed evidence log (Phase 5). Without it, nothing is recorded. */
   evidence?: EvidenceRecorder;
+  /** Every public key that signed a workspace's records; defaults to the log's current keys. */
+  keysFor?: (workspaceId: string) => Promise<PublicKeyEntry[]>;
   /** Where share links point (default http://localhost:3001). */
   publicUrl?: string;
   /** Reads a GitHub repository's files at a commit, to refresh "Coming up" on demand. */
@@ -71,6 +102,10 @@ export interface ProductRouterOptions {
     run: (repo: Repo, opts: { useModels: boolean; openPullRequest: boolean; requestedBy: string; triggeredBy: string | null; allRules?: boolean }) => Promise<CrewRun>;
     runs: CrewRunStore;
   };
+  /** Mounts more workspace routes with the same access checks (workspaceRoutes.ts). */
+  extra?: (r: express.Router, helpers: RouteHelpers) => void;
+  /** Email and password sign-in is on (reported by /auth/config). */
+  passwordSignIn?: boolean;
 }
 
 const EXCEPTION_STATUSES: ExceptionStatus[] = ['requested', 'approved', 'rejected', 'expired', 'revoked'];
@@ -97,6 +132,10 @@ export function createProductRouter(store: ProductStore, oidc: OidcProvider | nu
   const r = express.Router();
   const reposRoot = path.resolve(options.reposRoot);
   const ai = options.ai ?? new AiGateway(store.db);
+  const publicUrl = (options.publicUrl ?? 'http://localhost:3001').replace(/\/+$/, '');
+  const flows: FlowDeps = options.flows ?? { store, evidence: options.evidence, queue: null, publicUrl };
+  const keysFor =
+    options.keysFor ?? ((workspaceId: string) => (options.evidence ? options.evidence.log.publicKeys(workspaceId, [], new Map()) : Promise.resolve([] as PublicKeyEntry[])));
 
   /** The signed-in person as a user row, created on first use. */
   const userOf = (res: Response): User => {
@@ -124,7 +163,7 @@ export function createProductRouter(store: ProductStore, oidc: OidcProvider | nu
   // ---------------------------------------------------------------- sign-in
 
   r.get('/auth/config', (_req, res) => {
-    res.json({ oidcEnabled: Boolean(oidc), issuer: oidc?.config.issuer ?? null, loginUrl: oidc ? '/api/auth/login' : null });
+    res.json({ oidcEnabled: Boolean(oidc), passwordSignIn: Boolean(options.passwordSignIn), issuer: oidc?.config.issuer ?? null, loginUrl: oidc ? '/api/auth/login' : null });
   });
   if (oidc) {
     r.get('/auth/login', async (req, res) => {
@@ -215,6 +254,8 @@ export function createProductRouter(store: ProductStore, oidc: OidcProvider | nu
     const cloud = modelForTask('drafting', 'cloud');
     return {
       ...settings,
+      // The server can cap every workspace (LEXCOMPILER_AI_MAX_DAILY_TOKENS).
+      dailyTokenBudget: ai.effectiveBudget(workspaceId),
       tokensUsedToday: ai.tokensUsedToday(workspaceId),
       // The models each mode would use, so the owner sees where contract text goes.
       models: { local: localModelConfig().label, cloud: cloud ? cloud.label : null },
@@ -422,8 +463,14 @@ export function createProductRouter(store: ProductStore, oidc: OidcProvider | nu
       if (category !== undefined && !isRuleCategory(category)) throw new StoreError(`category must be one of ${RULE_CATEGORIES.join(', ')}`);
       const documentId = documentIdOverride ?? (req.body?.documentId ? String(req.body.documentId) : null);
       if (documentId && !store.getDocument(wid(req), documentId)) throw new StoreError('unknown document', 404);
-      // Without card values the clause is the parser's compile, as before; the card records
-      // what Legal saw and set.
+      // Values Legal set on the card are validated strictly (a bad value is a 400), compiled by
+      // the one override engine, and recorded on the card with what Legal saw.
+      let values;
+      try {
+        values = validateClauseValues(req.body?.values);
+      } catch (err) {
+        throw new StoreError((err as Error).message);
+      }
       const base = await compileClause({
         text,
         key,
@@ -431,6 +478,7 @@ export function createProductRouter(store: ProductStore, oidc: OidcProvider | nu
         citation: req.body?.citation ? String(req.body.citation) : undefined,
         category: category as RuleCategory | undefined,
         frameworkId: req.body?.frameworkId,
+        values,
       });
       const { card, scope } = await cardWithImpact(req, text, key);
       const clause = { ...base, category: card.category, deontic: card.clause.deontic, compiled: card.clause.compiled };
@@ -493,13 +541,19 @@ export function createProductRouter(store: ProductStore, oidc: OidcProvider | nu
           queuedScans.push({ repoId: repo.id, jobId: options.enqueueBranchScan(repo, version) });
         }
       }
+      // The default branch and every open pull request are re-checked against the new rule.
+      await ruleDecided(flows, { workspaceId: wid(req), rule: store.getRule(wid(req), version.ruleId)!, version, decision: 'approved', userId: userOf(res).id });
       res.json({ ...version, queuedScans, evidenceSeq: evidence?.seq ?? null });
     })
   );
   r.post(
     '/workspaces/:workspaceId/rule-versions/:versionId/reject',
     need('editRules'),
-    handle((req, res) => res.json(store.rejectRuleVersion(wid(req), String(req.params.versionId), userOf(res).id, String(req.body?.note || ''))))
+    handle(async (req, res) => {
+      const rejected = store.rejectRuleVersion(wid(req), String(req.params.versionId), userOf(res).id, String(req.body?.note || ''));
+      await ruleDecided(flows, { workspaceId: wid(req), rule: store.getRule(wid(req), rejected.ruleId)!, version: rejected, decision: 'rejected', userId: userOf(res).id });
+      res.json(rejected);
+    })
   );
   /**
    * Moves the effective date of an approved version that isn't in effect yet: { effectiveFrom }.
@@ -553,6 +607,7 @@ export function createProductRouter(store: ProductStore, oidc: OidcProvider | nu
       store.retireRule(wid(req), String(req.params.ruleId), userOf(res).id);
       const rule = store.getRule(wid(req), String(req.params.ruleId))!;
       await options.evidence?.ruleRetired(wid(req), rule, userOf(res).id);
+      await ruleDecided(flows, { workspaceId: wid(req), rule, decision: 'retired', userId: userOf(res).id });
       res.json(rule);
     })
   );
@@ -569,77 +624,73 @@ export function createProductRouter(store: ProductStore, oidc: OidcProvider | nu
 
   // ---------------------------------------------------------------- exceptions and the Legal inbox (Phase 4)
 
+  /** ?status=requested or several, comma separated (requested,approved). */
   r.get(
     '/workspaces/:workspaceId/exceptions',
     need('view'),
     handle((req, res) => {
-      const status = req.query.status ? String(req.query.status) : undefined;
-      if (status && !EXCEPTION_STATUSES.includes(status as ExceptionStatus)) throw new StoreError(`status must be one of ${EXCEPTION_STATUSES.join(', ')}`);
-      res.json(store.listExceptions(wid(req), { status: status as ExceptionStatus | undefined }));
+      const wanted = String(req.query.status ?? '')
+        .split(',')
+        .map((x) => x.trim())
+        .filter(Boolean);
+      for (const status of wanted) if (!EXCEPTION_STATUSES.includes(status as ExceptionStatus)) throw new StoreError(`status must be one of ${EXCEPTION_STATUSES.join(', ')}`);
+      res.json(store.listExceptions(wid(req), { status: wanted.length ? (wanted as ExceptionStatus[]) : undefined }));
     })
   );
   /**
-   * Engineers ask for an exception from the dashboard: { scanId, fingerprint } for one finding of a
-   * scan, or { scanId, ruleKey, pathGlob } for every finding of a rule under a path; and a reason.
+   * Engineers ask for an exception from the dashboard, with a reason and a scan, and:
+   * - { findingIds: [...] }: one exception per finding (waived findings are skipped); returns a list; or
+   * - { fingerprint }: one finding; or { ruleKey, pathGlob }: every finding of a rule under a path;
+   *   returns the exception (200 when that request is already open, else 201).
    */
   r.post(
     '/workspaces/:workspaceId/exceptions',
     need('requestExceptions'),
-    handle((req, res) => {
+    handle(async (req, res) => {
       const body = (req.body ?? {}) as Record<string, unknown>;
       const scan = store.getScan(wid(req), String(body.scanId || ''));
       if (!scan) throw new StoreError('scan not found', 404);
       const findings = store.listFindings(scan.id);
-      let ruleId: string;
-      let finding: { filePath: string; startLine: number; message: string } | null = null;
-      if (body.fingerprint) {
-        const f = findings.find((x) => x.fingerprint === String(body.fingerprint));
-        if (!f) throw new StoreError('that finding is not in this scan', 404);
-        ruleId = f.ruleId;
-        finding = { filePath: f.filePath, startLine: f.startLine, message: f.message };
-      } else {
-        const f = findings.find((x) => x.ruleKey === String(body.ruleKey || ''));
-        if (!f) throw new StoreError('this scan has no finding of that rule', 404);
-        ruleId = f.ruleId;
-      }
       const user = userOf(res);
-      const { exception, created } = store.requestException({
+      const ask = { workspaceId: wid(req), reason: String(body.reason ?? ''), requestedBy: user.id, requesterLabel: user.name ?? user.email ?? 'A member', via: 'dashboard' as const };
+      const ref = (f: StoredFinding) => ({ ruleId: f.ruleId, ruleKey: f.ruleKey, repoId: scan.repoId, scanId: scan.id, prNumber: scan.prNumber });
+      if (Array.isArray(body.findingIds)) {
+        const ids = new Set(body.findingIds.map(String));
+        const chosen = findings.filter((f) => ids.has(f.id) && f.state !== 'waived');
+        if (chosen.length === 0) throw new StoreError('choose at least one finding that is not already waived');
+        const records = await requestExceptions(flows, { ...ask, findings: chosen.map((f) => ({ ...ref(f), fingerprint: f.fingerprint, filePath: f.filePath, startLine: f.startLine, message: f.message })) });
+        return void res.status(201).json(records);
+      }
+      let finding: StoredFinding | undefined;
+      if (body.fingerprint) {
+        finding = findings.find((x) => x.fingerprint === String(body.fingerprint));
+        if (!finding) throw new StoreError('that finding is not in this scan', 404);
+      } else {
+        finding = findings.find((x) => x.ruleKey === String(body.ruleKey || ''));
+        if (!finding) throw new StoreError('this scan has no finding of that rule', 404);
+      }
+      const one = body.fingerprint
+        ? { ...ref(finding), fingerprint: finding.fingerprint, filePath: finding.filePath, startLine: finding.startLine, message: finding.message }
+        : { ...ref(finding), pathGlob: String(body.pathGlob || '') };
+      const [record] = await requestExceptions(flows, { ...ask, findings: [one] });
+      res.status(record.created ? 201 : 200).json(record);
+    })
+  );
+  const decide = (decision: 'approved' | 'rejected') =>
+    handle(async (req, res) => {
+      const e = await decideException(flows, {
         workspaceId: wid(req),
-        ruleId,
-        repoId: scan.repoId,
-        fingerprint: body.fingerprint ? String(body.fingerprint) : null,
-        pathGlob: body.fingerprint ? null : String(body.pathGlob || ''),
-        reason: String(body.reason || ''),
-        requestedBy: user.id,
-        requestedFrom: 'dashboard',
-        scan: { id: scan.id, prNumber: scan.prNumber, headSha: scan.commitSha, baseSha: scan.baseSha },
-        finding,
+        exceptionId: String(req.params.exceptionId),
+        decision,
+        userId: userOf(res).id,
+        note: String(req.body?.note || ''),
+        expiresAt: req.body?.expiresAt ? String(req.body.expiresAt) : null,
       });
-      res.status(created ? 201 : 200).json(exception);
-    })
-  );
-  const decided = async (exception: ExceptionRecord) => {
-    await options.evidence?.exceptionChanged(exception);
-    return { ...exception, rerunJobId: options.onExceptionDecided?.(exception) ?? null };
-  };
+      res.json(options.onExceptionDecided ? { ...e, rerunJobId: options.onExceptionDecided(e) ?? e.rerunJobId } : e);
+    });
   /** Legal approves with a reason and a required expiry date: { note, expiresAt }. */
-  r.post(
-    '/workspaces/:workspaceId/exceptions/:exceptionId/approve',
-    need('decideExceptions'),
-    handle(async (req, res) => {
-      if (!req.body?.expiresAt) throw new StoreError('expiresAt is required: every exception ends');
-      const e = store.decideException(wid(req), String(req.params.exceptionId), userOf(res).id, { approve: true, note: String(req.body?.note || ''), expiresAt: String(req.body.expiresAt) });
-      res.json(await decided(e));
-    })
-  );
-  r.post(
-    '/workspaces/:workspaceId/exceptions/:exceptionId/reject',
-    need('decideExceptions'),
-    handle(async (req, res) => {
-      const e = store.decideException(wid(req), String(req.params.exceptionId), userOf(res).id, { approve: false, note: String(req.body?.note || '') });
-      res.json(await decided(e));
-    })
-  );
+  r.post('/workspaces/:workspaceId/exceptions/:exceptionId/approve', need('decideExceptions'), decide('approved'));
+  r.post('/workspaces/:workspaceId/exceptions/:exceptionId/reject', need('decideExceptions'), decide('rejected'));
   /** Test-only admin action (guide, Phase 4 test): move an exception's expiry, for example to yesterday. */
   r.post(
     '/workspaces/:workspaceId/exceptions/:exceptionId/expiry',
@@ -649,7 +700,7 @@ export function createProductRouter(store: ProductStore, oidc: OidcProvider | nu
       const at = String(req.body?.expiresAt || '');
       if (Number.isNaN(Date.parse(at))) throw new StoreError('expiresAt must be a date');
       store.setExceptionExpiry(wid(req), String(req.params.exceptionId), at);
-      for (const e of store.expireExceptionRecords()) await options.evidence?.exceptionChanged(e);
+      await expireExceptions(flows);
       res.json(store.getException(wid(req), String(req.params.exceptionId)));
     })
   );
@@ -721,28 +772,34 @@ export function createProductRouter(store: ProductStore, oidc: OidcProvider | nu
 
   // ---------------------------------------------------------------- share links and the evidence log (Phase 5)
 
-  const publicUrl = (options.publicUrl ?? 'http://localhost:3001').replace(/\/+$/, '');
   r.get('/workspaces/:workspaceId/shares', need('createShares'), (req, res) => res.json(store.listShares(wid(req))));
   /**
-   * { ruleIds, periodFrom, periodTo, expiresAt, counterpartyId?, label? } → the link, shown once.
-   * The auditor sees those rules' history, checks and exceptions in the period, with signed evidence.
+   * { ruleIds?, periodFrom, periodTo, expiresAt, counterpartyId?, label? } → the link, shown once.
+   * Without ruleIds the share covers every rule that has been approved. The auditor sees those
+   * rules' history, checks and exceptions in the period, with signed evidence.
    */
   r.post(
     '/workspaces/:workspaceId/shares',
     need('createShares'),
     handle(async (req, res) => {
       const body = (req.body ?? {}) as Record<string, unknown>;
+      let ruleIds: string[];
+      if (Array.isArray(body.ruleIds)) ruleIds = body.ruleIds.map(String);
+      else {
+        ruleIds = store.currentRuleIds(wid(req));
+        if (ruleIds.length === 0) throw new StoreError('approve a rule before sharing evidence');
+      }
       const { token, share } = store.createShare({
         workspaceId: wid(req),
         label: body.label ? String(body.label) : null,
         counterpartyId: body.counterpartyId ? String(body.counterpartyId) : null,
-        ruleIds: Array.isArray(body.ruleIds) ? body.ruleIds.map(String) : [],
+        ruleIds,
         periodFrom: String(body.periodFrom ?? ''),
         periodTo: String(body.periodTo ?? ''),
         expiresAt: String(body.expiresAt ?? ''),
         createdBy: userOf(res).id,
       });
-      await options.evidence?.shareChanged(share, 'created');
+      await options.evidence?.shareChanged(share, 'created', userOf(res).id);
       res.status(201).json({ ...share, token, url: `${publicUrl}/share/${token}` });
     })
   );
@@ -750,8 +807,9 @@ export function createProductRouter(store: ProductStore, oidc: OidcProvider | nu
     '/workspaces/:workspaceId/shares/:shareId/revoke',
     need('createShares'),
     handle(async (req, res) => {
+      const before = store.getShare(wid(req), String(req.params.shareId));
       const share = store.revokeShare(wid(req), String(req.params.shareId));
-      await options.evidence?.shareChanged(share, 'revoked');
+      if (!before?.revokedAt) await options.evidence?.shareChanged(share, 'revoked', userOf(res).id);
       res.json(share);
     })
   );
@@ -764,17 +822,37 @@ export function createProductRouter(store: ProductStore, oidc: OidcProvider | nu
       res.json(store.listShareViews(String(req.params.shareId)));
     })
   );
-  /** The workspace's evidence records (headers and bodies), optionally within ?from=&to=. */
-  r.get('/workspaces/:workspaceId/evidence', need('createShares'), (req, res) => {
-    if (!options.evidence) return void res.json([]);
-    res.json(options.evidence.log.records(wid(req), { from: req.query.from ? String(req.query.from) : undefined, to: req.query.to ? String(req.query.to) : undefined }));
-  });
+  /**
+   * The workspace's evidence records, newest first, each with its signed header, its body and one
+   * plain line: { count, keys, entries }. ?limit= (default 100, up to 1000), ?from=&to=.
+   */
+  r.get(
+    '/workspaces/:workspaceId/evidence',
+    need('view'),
+    handle(async (req, res) => {
+      const log = options.evidence?.log;
+      if (!log) return void res.json({ count: 0, keys: [], entries: [] });
+      const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 1000);
+      const entries = log.list(wid(req), { from: req.query.from ? String(req.query.from) : undefined, to: req.query.to ? String(req.query.to) : undefined, latest: limit }).reverse();
+      res.json({
+        count: log.count(wid(req)),
+        keys: await keysFor(wid(req)),
+        entries: entries.map((e) => ({ seq: e.seq, header: e.header, headerJson: e.headerJson, headerSha256: e.headerSha256, signature: e.signature, body: e.body, bodyJson: e.bodyJson, ...describeEvidence(e) })),
+      });
+    })
+  );
 
   // ---------------------------------------------------------------- personal access tokens (Phase 4a)
 
-  /** The caller's own tokens for the MCP endpoint, and the endpoint's address. */
+  /** Workspace owners (and administrators) see and revoke everyone's tokens. */
+  const ownerView = (req: Request, res: Response) => {
+    const role = roleIn(req, res);
+    return role === 'admin' || role === 'owner';
+  };
+  /** The caller's own tokens for the MCP endpoint (owners: everyone's with ?all=1), and the endpoint's address. */
   r.get('/workspaces/:workspaceId/tokens', need('view'), (req, res) => {
-    res.json({ mcpUrl: options.mcpUrl ?? 'http://localhost:3001/mcp', tokens: store.listApiTokens(wid(req), userOf(res).id) });
+    const all = ownerView(req, res) && req.query.all === '1';
+    res.json({ mcpUrl: options.mcpUrl ?? `${publicUrl}/mcp`, tokens: all ? store.listAllApiTokens(wid(req)) : store.listApiTokens(wid(req), userOf(res).id) });
   });
   /** { name, days? } → the token, shown once. It acts as the caller, with the caller's role. */
   r.post(
@@ -783,15 +861,15 @@ export function createProductRouter(store: ProductStore, oidc: OidcProvider | nu
     handle((req, res) => {
       const days = req.body?.days === undefined ? undefined : Number(req.body.days);
       const { token, record } = store.createApiToken(wid(req), userOf(res).id, String(req.body?.name ?? ''), days);
-      res.status(201).json({ ...record, token });
+      res.status(201).json({ ...record, token, mcpUrl: options.mcpUrl ?? `${publicUrl}/mcp` });
     })
   );
   r.post(
     '/workspaces/:workspaceId/tokens/:tokenId/revoke',
     need('view'),
-    handle((req, res) => res.json(store.revokeApiToken(wid(req), userOf(res).id, String(req.params.tokenId))))
+    handle((req, res) => res.json(store.revokeApiToken(wid(req), userOf(res).id, String(req.params.tokenId), { canRevokeOthers: ownerView(req, res) })))
   );
-  /** The MCP call log: time, token, tool, repository, outcome and duration. */
+  /** The full MCP call log: time, token, tool, repository, outcome and duration (owners). The members' activity list is /assistant-calls. */
   r.get('/workspaces/:workspaceId/mcp/calls', need('manageWorkspace'), (req, res) => res.json(store.listMcpCalls(wid(req), Number(req.query.limit) || 50)));
 
   // ---------------------------------------------------------------- scans
@@ -880,5 +958,6 @@ export function createProductRouter(store: ProductStore, oidc: OidcProvider | nu
     })
   );
 
+  options.extra?.(r, { userOf, roleIn, need, isAdmin, handle, wid, flows, evidence: options.evidence?.log ?? null, keysFor, oidcEnabled: Boolean(oidc) });
   return r;
 }

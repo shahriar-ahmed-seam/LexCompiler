@@ -380,7 +380,7 @@ export function LegalWorkspace() {
             ))}
           </select>
         </label>
-        <a className="text-sm text-sky-300 underline ml-auto" href="/">
+        <a className="text-sm text-sky-300 underline ml-auto" href="/lab">
           Back to the demo dashboard
         </a>
       </header>

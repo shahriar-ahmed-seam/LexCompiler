@@ -370,6 +370,56 @@ describe('workspace MCP endpoint: tools', () => {
   });
 });
 
+describe('workspace MCP endpoint: assistant-friendly behaviour', () => {
+  it('answers in plain language beside the structured data, and works without naming a repository when there is one', async () => {
+    // Two repositories here: without repo, list_rules covers the whole workspace; check_changes asks which.
+    const all = await tool('list_rules', {});
+    expect(all.isError).toBe(false);
+    expect(all.text).toContain('R-1 v1');
+    expect(all.data.repo).toBeNull();
+    const ask = await tool('check_changes', { files: CHANGE });
+    expect(ask.isError).toBe(true);
+    expect(ask.text).toContain('Name the repository');
+
+    const check = await tool('check_changes', { repo: 'core-platform', files: CHANGE });
+    expect(check.text).toContain('These block the pull request');
+    expect(check.data.findings[0]).toMatchObject({ line: check.data.findings[0].startLine });
+  });
+
+  it('explains a rule by its key alone, with guidance on how code satisfies it', async () => {
+    const r = await tool('explain_finding', { rule: 'R-2' });
+    expect(r.isError).toBe(false);
+    expect(r.data.finding).toBeUndefined();
+    expect(r.text).toContain('How code usually satisfies it');
+    expect(r.data.howToFix).toBeTruthy();
+    expect((await tool('explain_finding', {})).text).toContain('Give a fingerprint');
+    expect((await tool('explain_finding', { rule: 'R-99' })).text).toContain('No rule R-99');
+  });
+
+  it('takes an exception request for a finding it was not shown, with no end date, labelled with the assistant', async () => {
+    // The test client names itself in _meta (2026-07-28); the name is kept on the token and labels the request.
+    const fingerprint = 'f'.repeat(64);
+    const asked = await tool('request_exception', { fingerprint, rule: 'R-2', repo: 'core-platform', path: 'api/new_endpoint.py', line: 7, message: 'Logs a phone number', reason: 'Not on GitHub yet; fixed in LN-13.' });
+    expect(asked.isError).toBe(false);
+    expect(asked.text).toContain('waiting for Legal');
+    expect(asked.data).toMatchObject({ status: 'requested', created: true, rule: 'R-2', path: 'api/new_endpoint.py', requestedUntil: null });
+    const stored = store.getException(finhealth, asked.data.exceptionId)!;
+    expect(stored).toMatchObject({ requestedFrom: 'assistant', requesterLabel: expect.stringContaining('via test'), startLine: 7 });
+    expect((await tool('request_exception', { fingerprint: 'e'.repeat(64), reason: 'no such finding is known' })).text).toContain('not known here');
+    const tokenRecord = store.listApiTokens(finhealth, store.getUserBySub('tanvir')!.id).find((t) => t.lastClient === 'test');
+    expect(tokenRecord).toBeTruthy();
+    const log = store.listMcpCalls(finhealth).find((c) => c.tool === 'request_exception' && c.outcome === 'ok');
+    expect(log).toMatchObject({ client: 'test', userId: store.getUserBySub('tanvir')!.id, summary: 'R-2 requested' });
+  });
+
+  it('searches rules by meaning when an embedding model answers, and by keyword otherwise', async () => {
+    const r = await tool('search_obligations', { query: 'may national ID numbers be written to logs?' });
+    expect(['semantic', 'keyword']).toContain(r.data.mode);
+    expect(r.text).toContain('Closest approved rules');
+    expect(r.data.results[0].key ?? r.data.results[0].documentId).toBeTruthy();
+  });
+});
+
 describe('personal access tokens API', () => {
   it('creates a token shown once, lists it without the secret, and revokes it', async () => {
     const call = (p: string, body?: unknown) =>

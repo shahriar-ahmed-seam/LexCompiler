@@ -10,6 +10,17 @@ export interface Migration {
 
 const ROLE_CHECK = "CHECK (role IN ('owner','legal','engineer','viewer'))";
 
+/**
+ * Data fixes of migration 17, also run when a database built by the other lineage is reconciled:
+ * every exception gets its rule's key, and requests made by a coding assistant are stored as
+ * 'assistant' (one name for one origin).
+ */
+const EXCEPTION_DATA_FIXES = `
+UPDATE exceptions SET rule_key = (SELECT r.key FROM rules r WHERE r.id = exceptions.rule_id)
+  WHERE rule_key IS NULL;
+UPDATE exceptions SET requested_from = 'assistant' WHERE requested_from = 'mcp';
+`;
+
 export const MIGRATIONS: Migration[] = [
   {
     id: 1,
@@ -565,4 +576,148 @@ CREATE TABLE feed_item_notes (
 );
 `,
   },
+  {
+    id: 15,
+    name: 'password sign-in, people profiles, workspace plan and archive',
+    sql: `
+-- Password sign-in (scrypt hashes) for workspaces that don't use an identity provider.
+ALTER TABLE users ADD COLUMN password_hash TEXT;
+-- Who someone is on GitHub (to match pull request authors) and their job title.
+ALTER TABLE users ADD COLUMN github_login TEXT;
+ALTER TABLE users ADD COLUMN title TEXT;
+CREATE UNIQUE INDEX users_github_login ON users(lower(github_login)) WHERE github_login IS NOT NULL;
+
+-- The workspace's plan, and when it was archived (archived workspaces are hidden and their tokens stop working).
+ALTER TABLE workspaces ADD COLUMN plan TEXT NOT NULL DEFAULT 'pilot';
+ALTER TABLE workspaces ADD COLUMN archived_at TEXT;
+`,
+  },
+  {
+    id: 16,
+    name: 'assistant token hints and clients, people on MCP calls',
+    sql: `
+-- The last characters of a token, so people can tell their tokens apart. Older tokens have none:
+-- only their SHA-256 was stored.
+ALTER TABLE api_tokens ADD COLUMN token_hint TEXT;
+-- The coding assistant that last used the token (from the MCP client info).
+ALTER TABLE api_tokens ADD COLUMN last_client TEXT;
+
+-- Who made each MCP call, from which assistant, and a one-line summary (never the code sent).
+ALTER TABLE mcp_calls ADD COLUMN user_id TEXT;
+ALTER TABLE mcp_calls ADD COLUMN client TEXT;
+ALTER TABLE mcp_calls ADD COLUMN summary TEXT;
+UPDATE mcp_calls SET user_id = (SELECT t.user_id FROM api_tokens t WHERE t.id = mcp_calls.token_id)
+  WHERE user_id IS NULL AND token_id IS NOT NULL;
+`,
+  },
+  {
+    id: 17,
+    name: 'exception rule key and requester label',
+    sql: `
+-- The rule's key as it was when the exception was requested, and who asked (for example the
+-- assistant and person behind an MCP request).
+ALTER TABLE exceptions ADD COLUMN rule_key TEXT;
+ALTER TABLE exceptions ADD COLUMN requester_label TEXT;
+${EXCEPTION_DATA_FIXES}
+`,
+  },
 ];
+
+/**
+ * The name migration 4 had in the other development line, whose ids 4 to 6 mean different
+ * things: its 4 added password sign-in, the token and MCP call tables and exception details
+ * (here in 6, 15, 16 and 17), and its 5 and 6 were the agent crew runs (here 12 and 13).
+ */
+export const SEAM_LINEAGE_MIGRATION_4 = 'password sign-in, assistant tokens, MCP call log, exception details';
+
+/** The schema surface reconcileSeamLineage needs from the database (node:sqlite's DatabaseSync). */
+interface SqlDb {
+  exec(sql: string): void;
+  prepare(sql: string): { all(...params: unknown[]): unknown[]; get(...params: unknown[]): unknown; run(...params: unknown[]): unknown };
+}
+
+function columnsOf(db: SqlDb, table: string): Set<string> {
+  return new Set((db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map((c) => String(c.name)));
+}
+
+function tableExists(db: SqlDb, table: string): boolean {
+  return db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table) !== undefined;
+}
+
+/**
+ * Brings a database created by the other development line (migrations 1-3 as here, then its own
+ * 4-6) onto this numbering, so migrate() can apply the rest. Run by migrate() before the loop, in
+ * a transaction. Returns whether anything was done. It is a no-op on every other database,
+ * including this line's own (whose migration 4 has a different name), so it runs once.
+ *
+ * What it does:
+ * - adds the columns of this line's 4, 5 and 6 that the other line never had (document files,
+ *   rule card values, exception head/base SHAs and requested end date, MCP call details) and the
+ *   api_tokens_owner index;
+ * - runs migration 17's data fixes (its columns, like 15's and 16's, already exist);
+ * - rewrites schema_migrations: 4-6 under this line's names, 12 and 13 when the crew-run table
+ *   and its workspace column exist, and 15-17.
+ *
+ * Differences that remain on a reconciled database, all harmless: api_tokens.token_hint is NOT
+ * NULL (so every insert must write it), exceptions.scan_id has no foreign key, mcp_calls.outcome
+ * has no CHECK, and the extra index api_tokens_workspace stays.
+ */
+export function reconcileSeamLineage(db: SqlDb): boolean {
+  if (!tableExists(db, 'schema_migrations')) return false;
+  const row4 = db.prepare('SELECT name FROM schema_migrations WHERE id = 4').get() as { name: string } | undefined;
+  if (!row4) return false;
+  const applied = new Set((db.prepare('SELECT id FROM schema_migrations').all() as Array<{ id: number }>).map((r) => Number(r.id)));
+  const ownName4 = MIGRATIONS.find((m) => m.id === 4)?.name;
+  const seamByName = row4.name === SEAM_LINEAGE_MIGRATION_4;
+  // Fallback for a renamed row: the other line's 4 added users.password_hash, this line's 4 never does.
+  const seamByShape = row4.name !== ownName4 && !applied.has(15) && columnsOf(db, 'users').has('password_hash');
+  if (!seamByName && !seamByShape) return false;
+
+  const addColumns = (table: string, columns: Array<[string, string]>) => {
+    const have = columnsOf(db, table);
+    for (const [name, type] of columns) {
+      if (!have.has(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${type}`);
+    }
+  };
+  // This line's 4.
+  addColumns('documents', [['file_name', 'TEXT'], ['file_format', 'TEXT'], ['file_blob', 'BLOB']]);
+  addColumns('rule_versions', [['card_json', 'TEXT']]);
+  // This line's 5 (scan_id, pr_number, file_path, start_line, message and both indexes came with the other 4).
+  addColumns('exceptions', [['scan_id', 'TEXT'], ['pr_number', 'INTEGER'], ['head_sha', 'TEXT'], ['base_sha', 'TEXT'],
+    ['file_path', 'TEXT'], ['start_line', 'INTEGER'], ['message', 'TEXT']]);
+  db.exec('CREATE INDEX IF NOT EXISTS exceptions_workspace_status ON exceptions(workspace_id, status)');
+  db.exec('CREATE INDEX IF NOT EXISTS scans_check_run ON scans(check_run_id)');
+  // This line's 6 (the tables came with the other 4).
+  addColumns('exceptions', [['requested_until', 'TEXT']]);
+  addColumns('mcp_calls', [['detail_json', 'TEXT']]);
+  db.exec('CREATE INDEX IF NOT EXISTS api_tokens_owner ON api_tokens(workspace_id, user_id)');
+  // 15, 16 and 17: the columns came with the other 4; add any that are missing all the same.
+  addColumns('users', [['password_hash', 'TEXT'], ['github_login', 'TEXT'], ['title', 'TEXT']]);
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS users_github_login ON users(lower(github_login)) WHERE github_login IS NOT NULL');
+  addColumns('workspaces', [['plan', "TEXT NOT NULL DEFAULT 'pilot'"], ['archived_at', 'TEXT']]);
+  addColumns('api_tokens', [['token_hint', 'TEXT'], ['last_client', 'TEXT']]);
+  addColumns('mcp_calls', [['user_id', 'TEXT'], ['client', 'TEXT'], ['summary', 'TEXT']]);
+  db.exec(`UPDATE mcp_calls SET user_id = (SELECT t.user_id FROM api_tokens t WHERE t.id = mcp_calls.token_id)
+    WHERE user_id IS NULL AND token_id IS NOT NULL`);
+  addColumns('exceptions', [['rule_key', 'TEXT'], ['requester_label', 'TEXT']]);
+  db.exec(EXCEPTION_DATA_FIXES);
+
+  // Renumber: the other line's 5 and 6 are this line's 12 and 13.
+  const now = new Date().toISOString();
+  const nameOf = (id: number) => {
+    const m = MIGRATIONS.find((x) => x.id === id);
+    if (!m) throw new Error(`reconcileSeamLineage: no migration ${id}`);
+    return m.name;
+  };
+  const markApplied = (id: number) => {
+    db.prepare(
+      'INSERT INTO schema_migrations (id, name, applied_at) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name'
+    ).run(id, nameOf(id), now);
+  };
+  const crewRuns = tableExists(db, 'agent_crew_runs');
+  for (const id of [4, 5, 6]) markApplied(id);
+  if (crewRuns) markApplied(12);
+  if (crewRuns && columnsOf(db, 'agent_crew_runs').has('workspace_id')) markApplied(13);
+  for (const id of [15, 16, 17]) markApplied(id);
+  return true;
+}

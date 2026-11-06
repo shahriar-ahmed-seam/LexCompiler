@@ -1,23 +1,39 @@
 import crypto from 'node:crypto';
 import {
-  compileLegalProseWithOverrides,
   findConfidenceThresholds,
   findTemporalDurations,
+  inferRuleCategoryFromProse,
   inferRuleCategoryWithEvidence,
   type RuleValueOverrides,
 } from '../compiler/legalCompiler.js';
-import { checkExtraction, checkParserOnly, EXTRACTION_SCHEMA, extractionPrompt, numericFieldFor, validateExtraction, type CheckedValue, type ModelExtraction } from '../ai/extraction.js';
-import type { AiGateway } from '../ai/gateway.js';
+import {
+  checkExtraction,
+  checkParserOnly,
+  EXTRACTION_SCHEMA,
+  extractionPrompt,
+  FIELD_UNIT,
+  numericFieldFor,
+  validateExtraction,
+  type CheckedValue,
+  type ModelExtraction,
+  type NumericField,
+} from '../ai/extraction.js';
+import type { AiGateway, AiMode } from '../ai/gateway.js';
 import { verifyRepositoryAgainstClauses } from '../prover/z3Engine.js';
 import type { ASTFindingNode, LegalClause, RuleCategory, SQLTableSchema } from '../../shared/types.js';
-import { compileClauseSync, isRuleCategory } from './clauses.js';
+import { compileClauseSync, isRuleCategory, validateClauseValues, type ClauseValues } from './clauses.js';
 import { asciiDigits } from './documents.js';
+import type { GovernanceStore } from './governance.js';
+import type { ProductStore } from './store.js';
 
 /**
  * The rule card (product guide, Phase 3 and 5.4): what Legal sees before approving a clause as a
  * rule. Values come from the deterministic parser. With AI on, a model may suggest a value, but it
  * is shown only when the quote is in the clause and the parser reads the same value from the
  * quote and from the whole clause (`checkExtraction`); otherwise the card asks a question.
+ *
+ * `buildRuleCard` is the one engine. `analyzeRule` (the web app's "analyze" screen) is an adapter
+ * over it that returns the single-value `AnalyzedRule` shape.
  */
 
 export const CATEGORY_LABELS: Record<RuleCategory, string> = {
@@ -33,6 +49,13 @@ export const CATEGORY_LABELS: Record<RuleCategory, string> = {
   DATA_MINIMISATION: 'Data minimisation',
   PURPOSE_LIMITATION: 'Purpose limitation',
 };
+
+/** "72 hours", "168 hours (7 days)", "30 minutes". */
+export function formatHours(h: number): string {
+  if (h < 1) return `${Math.round(h * 60)} minutes`;
+  const hours = `${Number.isInteger(h) ? h : Math.round(h * 100) / 100} hour${h === 1 ? '' : 's'}`;
+  return h >= 48 && h % 24 === 0 ? `${hours} (${h / 24} days)` : hours;
+}
 
 /** The fixed questions per category (guide, Phase 3 item 3). */
 const CATEGORY_QUESTIONS: Partial<Record<RuleCategory, Array<{ id: string; text: string; sets?: keyof RuleValueOverrides }>>> = {
@@ -78,6 +101,20 @@ export interface AiSuggestion {
   checked: CheckedValue;
 }
 
+export type AiCallStatus = 'off' | 'not_needed' | 'ok' | 'refused' | 'invalid' | 'error';
+
+/** What happened to the model call behind a card: shown as the model badge in the web app. */
+export interface AiCallSummary {
+  mode: AiMode;
+  /** off: AI is off; not_needed: the category has no number to read; ok: the model answered; refused / invalid / error: no usable answer, the parser's value stands. */
+  status: AiCallStatus;
+  model: string | null;
+  endpointHost: string | null;
+  detail: string | null;
+  tokens: number;
+  latencyMs: number;
+}
+
 export interface RuleCard {
   category: RuleCategory;
   categoryLabel: string;
@@ -90,6 +127,8 @@ export interface RuleCard {
   ai: AiSuggestion | null;
   /** Set when AI is on but no suggestion was made (the call failed or was refused). */
   aiNote: string | null;
+  /** The model call itself: mode, outcome, model, host, tokens and latency. */
+  aiCall: AiCallSummary;
   clause: LegalClause;
 }
 
@@ -123,12 +162,23 @@ function parameterValue(clause: LegalClause, field: keyof RuleValueOverrides): C
   return v === undefined ? null : (v as CardValue['value']);
 }
 
-/** Plain-language reading from a fixed template per category. */
-export function plainReading(category: RuleCategory, clause: LegalClause): string {
+/** Hours as the reading states them: "72 hours" (no days in brackets), minutes under an hour. */
+const hoursText = (h: number | undefined) => (h === undefined ? '? hours' : h < 1 ? formatHours(h) : formatHours(h).replace(/ \(\d+(?:\.\d+)? days\)$/, ''));
+
+/**
+ * Plain-language reading from a fixed template per category. Call it with the clause alone (its
+ * own category) or with the category the card shows.
+ */
+export function plainReading(clause: LegalClause): string;
+export function plainReading(category: RuleCategory, clause: LegalClause): string;
+export function plainReading(a: RuleCategory | LegalClause, b?: LegalClause): string {
+  const clause = typeof a === 'string' ? b : a;
+  if (!clause) throw new TypeError('plainReading needs a clause');
+  const category = typeof a === 'string' ? a : a.category;
   const p = clause.deontic.extractedParameters;
   switch (category) {
     case 'RETENTION_AND_TENANT_KMS':
-      return `Personal data must be deleted within ${p.maxRetentionHours ?? '?'} hours${p.requiresTenantIsolatedKeys ? ', and stored encrypted with a key that belongs to one tenant only' : ''}.`;
+      return `Personal data must be deleted within ${hoursText(p.maxRetentionHours)}${p.requiresTenantIsolatedKeys ? ', and stored encrypted with a key that belongs to one tenant only' : ''}.`;
     case 'ENCRYPTION_AT_REST':
       return `Columns with personal data must be encrypted at rest${p.requiredEncryptionAlgorithms?.length ? ` (${p.requiredEncryptionAlgorithms.join(', ')})` : ''}.`;
     case 'PII_LOGGING_BAN':
@@ -142,7 +192,7 @@ export function plainReading(category: RuleCategory, clause: LegalClause): strin
     case 'CONSENT_LAWFUL_BASIS':
       return 'Personal data may only be processed after a consent or lawful-basis check.';
     case 'BREACH_NOTIFICATION':
-      return `A personal data breach must be reported within ${p.maxBreachNotificationHours ?? '?'} hours.`;
+      return `A personal data breach must be reported within ${hoursText(p.maxBreachNotificationHours)}.`;
     case 'DPIA_REQUIRED':
       return 'High-risk processing needs a data protection impact assessment on file.';
     case 'DATA_MINIMISATION':
@@ -219,20 +269,41 @@ export async function buildRuleCard(input: CardInput): Promise<RuleCard> {
   let ai: AiSuggestion | null = null;
   let aiNote: string | null = null;
   const field = numericFieldFor(category);
-  if (input.ai && field && input.ai.gateway.settings(input.ai.workspaceId).mode !== 'off') {
+  const mode: AiMode = input.ai ? input.ai.gateway.modeFor(input.ai.workspaceId) : 'off';
+  const aiCall: AiCallSummary = { mode, status: mode === 'off' ? 'off' : 'not_needed', model: null, endpointHost: null, detail: null, tokens: 0, latencyMs: 0 };
+  if (input.ai && field && mode !== 'off') {
     const { system, prompt } = extractionPrompt(input.text, field);
-    const r = await input.ai.gateway.complete({ workspaceId: input.ai.workspaceId, task: 'drafting', system, prompt, schema: EXTRACTION_SCHEMA, validate: validateExtraction, maxTokens: 200, timeoutMs: 120_000 });
-    if (r.refused) aiNote = r.refused === 'budget' ? 'The daily AI budget is used up; values come from the parser only.' : 'No model is configured for this AI mode; values come from the parser only.';
-    else if (r.error) aiNote = `The model call failed (${r.error}); values come from the parser only.`;
-    else {
+    const r = await input.ai.gateway.complete({
+      workspaceId: input.ai.workspaceId,
+      task: 'drafting',
+      system,
+      prompt,
+      schema: EXTRACTION_SCHEMA,
+      validate: validateExtraction,
+      maxTokens: 200,
+      // A local model can be slow on a laptop; a cloud model answers fast or not at all.
+      timeoutMs: mode === 'local' ? 120_000 : 25_000,
+    });
+    Object.assign(aiCall, { model: r.model || null, endpointHost: r.endpointHost || null, tokens: r.usage.promptTokens + r.usage.completionTokens, latencyMs: r.latencyMs });
+    if (r.refused) {
+      aiNote = r.refused === 'budget' ? 'The daily AI budget is used up; values come from the parser only.' : 'No model is configured for this AI mode; values come from the parser only.';
+      Object.assign(aiCall, { status: 'refused', detail: r.refused === 'budget' ? "Today's AI token budget is used up." : r.refused === 'no_model' ? 'No model is configured for this mode.' : 'AI is off.' });
+    } else if (r.error) {
+      aiNote = `The model call failed (${r.error}); values come from the parser only.`;
+      Object.assign(aiCall, { status: 'error', detail: r.error.slice(0, 200) });
+    } else if (!r.ok) {
+      // The model answered, but not with valid JSON: its answer is ignored and the parser's checked value stands.
+      const detail = r.invalid ?? 'The answer was not valid JSON.';
+      aiNote = `The model's answer was not usable (${detail}); values come from the parser only.`;
+      Object.assign(aiCall, { status: 'invalid', detail: detail.slice(0, 200) });
+    } else {
+      aiCall.status = 'ok';
       const promptSha256 = crypto.createHash('sha256').update(`${system}\n\n${prompt}`, 'utf8').digest('hex');
-      ai = { model: r.model, promptSha256, checked: checkExtraction(input.text, category, r.ok ? (r.json as ModelExtraction) : null)! };
+      ai = { model: r.model, promptSha256, checked: checkExtraction(input.text, category, r.json as ModelExtraction)! };
     }
   }
 
-  const compiled = Object.keys(overrides).length
-    ? assembleWith(input, category, overrides)
-    : compileClauseSync({ text: input.text, key: input.key, title: input.title, citation: input.citation, category });
+  const compiled = compileClauseSync({ text: input.text, key: input.key, title: input.title, citation: input.citation, category, values: overrides });
 
   const values: CardValue[] = fieldsFor(category).map((f) => {
     const label = VALUE_LABELS[f];
@@ -263,29 +334,17 @@ export async function buildRuleCard(input: CardInput): Promise<RuleCard> {
     questions,
     ai,
     aiNote,
+    aiCall,
     clause: compiled,
   };
 }
 
-function assembleWith(input: CardInput, category: RuleCategory, overrides: RuleValueOverrides): LegalClause {
-  const base = compileClauseSync({ text: input.text, key: input.key, title: input.title, citation: input.citation, category });
-  return { ...base, ...compileLegalProseWithOverrides(input.text, category, input.key, input.citation || input.key, overrides) };
-}
-
-/** Keeps only valid values; anything else is dropped rather than compiled. */
+/**
+ * Keeps only valid values; anything else is dropped rather than compiled. The lenient form of
+ * `validateClauseValues` (same ranges), for the card preview while Legal is still typing.
+ */
 export function cleanOverrides(raw: unknown): RuleValueOverrides {
-  const o = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
-  const out: RuleValueOverrides = {};
-  const hours = (v: unknown) => typeof v === 'number' && Number.isFinite(v) && v > 0 && v <= 24 * 365 * 100;
-  if (hours(o.maxRetentionHours)) out.maxRetentionHours = o.maxRetentionHours as number;
-  if (hours(o.maxBreachNotificationHours)) out.maxBreachNotificationHours = o.maxBreachNotificationHours as number;
-  if (typeof o.requiresTenantIsolatedKeys === 'boolean') out.requiresTenantIsolatedKeys = o.requiresTenantIsolatedKeys;
-  if (typeof o.minAiConfidenceThreshold === 'number' && o.minAiConfidenceThreshold > 0 && o.minAiConfidenceThreshold <= 1) out.minAiConfidenceThreshold = o.minAiConfidenceThreshold;
-  if (Array.isArray(o.allowedDataRegions)) {
-    const regions = o.allowedDataRegions.map((r) => String(r).trim().toLowerCase()).filter((r) => /^[a-z0-9-]{2,30}$/.test(r));
-    if (regions.length) out.allowedDataRegions = [...new Set(regions)].slice(0, 20);
-  }
-  return out;
+  return validateClauseValues(raw, { lenient: true });
 }
 
 export interface ImpactRepo {
@@ -293,26 +352,153 @@ export interface ImpactRepo {
   repoName: string;
   scanId: string | null;
   commitSha: string | null;
+  /** When the scan the preview ran against finished (null when unknown or unscanned). */
+  scannedAt: string | null;
   /** null when the repo has no completed scan to test against. */
   failures: number | null;
-  places: Array<{ filePath: string; line: number }>;
+  places: Array<{ filePath: string; line: number; explanation: string }>;
 }
 
 /** Runs the prover with the draft clause against each repo's stored facts (the last scan of main). */
 export async function impactPreview(
   clause: LegalClause,
-  repos: Array<{ repoId: string; repoName: string; scan: { id: string; commitSha: string; facts: { sqlTables: unknown[]; astFindings: unknown[] } } | null }>
+  repos: Array<{
+    repoId: string;
+    repoName: string;
+    scan: { id: string; commitSha: string; finishedAt?: string | null; facts: { sqlTables: unknown[]; astFindings: unknown[] } } | null;
+  }>
 ): Promise<ImpactRepo[]> {
   const out: ImpactRepo[] = [];
   for (const r of repos) {
     if (!r.scan) {
-      out.push({ repoId: r.repoId, repoName: r.repoName, scanId: null, commitSha: null, failures: null, places: [] });
+      out.push({ repoId: r.repoId, repoName: r.repoName, scanId: null, commitSha: null, scannedAt: null, failures: null, places: [] });
       continue;
     }
     const { proofs } = await verifyRepositoryAgainstClauses([clause], r.scan.facts.sqlTables as SQLTableSchema[], r.scan.facts.astFindings as ASTFindingNode[]);
-    const places = proofs.filter((p) => p.status === 'UNSAT_VIOLATION').flatMap((p) => p.offendingLocations.map((l) => ({ filePath: l.filePath, line: l.line })));
+    const places = proofs
+      .filter((p) => p.status === 'UNSAT_VIOLATION')
+      .flatMap((p) => p.offendingLocations.map((l) => ({ filePath: l.filePath, line: l.line, explanation: l.explanation })));
     const unique = [...new Map(places.map((p) => [`${p.filePath}:${p.line}`, p])).values()];
-    out.push({ repoId: r.repoId, repoName: r.repoName, scanId: r.scan.id, commitSha: r.scan.commitSha, failures: unique.length, places: unique });
+    out.push({ repoId: r.repoId, repoName: r.repoName, scanId: r.scan.id, commitSha: r.scan.commitSha, scannedAt: r.scan.finishedAt ?? null, failures: unique.length, places: unique });
   }
   return out;
+}
+
+// ---------------------------------------------------------------- the web app's "analyze" screen
+
+const OBLIGATION_RE = /\b(?:must not|must|shall not|shall|may not|may only|prohibited|is required|are required|required to|never)\b|অবশ্যই|করতে হবে|নিষিদ্ধ|যাবে না|বাধ্যতামূলক|লাগবে/giu;
+const VALUE_RE =
+  /\b(?:\d+(?:\.\d+)?|half an?|one|two|three|four|five|six|seven|eight|nine|ten|twelve|fifteen|twenty|thirty|forty-eight|seventy-two|ninety)(?:\s*\(\d+\))?\s*(?:hours?|hrs?|minutes?|days?|weeks?|fortnights?|months?|years?)\b|\ba fortnight\b|\b\d{1,3}(?:\.\d+)?\s*(?:%|percent)|\b0\.\d+\b|[০-৯]+(?:\.[০-৯]+)?\s*(?:ঘণ্টা|ঘন্টা|দিন|শতাংশ)|[০-৯]\.[০-৯]+/giu;
+
+/** A highlight on the analyze screen: the model's verified quote, a value, or an obligation word. */
+export interface AnalyzeHighlight {
+  start: number;
+  end: number;
+  kind: 'value' | 'obligation' | 'quote';
+}
+
+/** Words to highlight on the analyze screen: the model's verified quote, values, and obligation words. */
+export function analyzeHighlights(text: string, quote: string | null): AnalyzeHighlight[] {
+  const out: AnalyzeHighlight[] = [];
+  if (quote) {
+    const i = text.toLowerCase().indexOf(quote.toLowerCase());
+    if (i >= 0) out.push({ start: i, end: i + quote.length, kind: 'quote' });
+  }
+  for (const m of text.matchAll(VALUE_RE)) out.push({ start: m.index!, end: m.index! + m[0].length, kind: 'value' });
+  for (const m of text.matchAll(OBLIGATION_RE)) out.push({ start: m.index!, end: m.index! + m[0].length, kind: 'obligation' });
+  // Keep the first of overlapping ranges (quote, then values, then words), then sort.
+  const kept: AnalyzeHighlight[] = [];
+  for (const h of out) if (!kept.some((k) => h.start < k.end && k.start < h.end)) kept.push(h);
+  return kept.sort((a, b) => a.start - b.start);
+}
+
+/** The one number a category enforces, as the analyze screen shows it. */
+export interface RuleCardValue {
+  field: NumericField | null;
+  unit: string | null;
+  value: number | null;
+  status: 'confirmed' | 'question' | 'set_by_legal' | 'not_needed';
+  question: string | null;
+  parserValue: number | null;
+  modelValue: number | null;
+  quote: string | null;
+}
+
+/** The analyze screen's card: one numeric value, the model call, highlights and the impact. */
+export interface AnalyzedRule {
+  category: RuleCategory;
+  categoryLabel: string;
+  inferredCategory: RuleCategory;
+  value: RuleCardValue;
+  ai: AiCallSummary;
+  highlights: AnalyzeHighlight[];
+  plainReading: string;
+  reviewNotes: string[];
+  impact: Array<{ repoId: string; repoFullName: string; commitSha: string; scannedAt: string | null; failing: number; locations: Array<{ filePath: string; line: number; explanation: string }> }>;
+  compiled: { smtLib2: string; rego: string; formula: string };
+  /** Values other than the number that still need Legal (for example allowed regions); approval waits for them. */
+  openValues: CardValue[];
+  /** The card's questions for Legal (review notes, the category's fixed questions). */
+  questions: CardQuestion[];
+}
+
+/**
+ * The analyze screen over `buildRuleCard`. The number is quote-checked as on the card: a model
+ * value is used only when its quote is in the clause and the parser agrees; otherwise it is a
+ * question. A value Legal sets wins. Impact runs against each repository's latest checked scan
+ * of the default branch (repositories without one are left out).
+ */
+export async function analyzeRule(
+  input: { workspaceId: string; text: string; category?: RuleCategory; values?: ClauseValues; key?: string },
+  deps: { store: ProductStore; gov: GovernanceStore; ai: AiGateway }
+): Promise<AnalyzedRule> {
+  const text = input.text.trim();
+  const key = input.key ?? 'DRAFT';
+  const inferred = inferRuleCategoryFromProse(text);
+  const category = input.category ?? inferred;
+  const field = numericFieldFor(category);
+  const legalValues = validateClauseValues(input.values ?? {}, { lenient: true });
+
+  const card = await buildRuleCard({ text, key, category, overrides: legalValues, ai: { gateway: deps.ai, workspaceId: input.workspaceId } });
+
+  let value: RuleCardValue = { field, unit: field ? FIELD_UNIT[field] : null, value: null, status: 'not_needed', question: null, parserValue: null, modelValue: null, quote: null };
+  if (field) {
+    const checked = card.ai?.checked ?? checkParserOnly(text, category);
+    const shown = card.values.find((v) => v.field === field);
+    if (checked) value = { ...value, value: checked.value, status: checked.status === 'accepted' ? 'confirmed' : 'question', question: checked.question, parserValue: checked.parserValue, modelValue: checked.modelValue, quote: checked.quote };
+    if (shown?.source === 'legal' && typeof shown.value === 'number') value = { ...value, value: shown.value, status: 'set_by_legal', question: null };
+  }
+
+  // The preview enforces the number shown: when a confirmed value differs from the parser's compile, compile with it.
+  let clause = card.clause;
+  if (field && value.value !== null && clause.deontic.extractedParameters[field] !== value.value) {
+    clause = compileClauseSync({ text, key, category, values: { ...legalValues, [field]: value.value } });
+  }
+
+  const preview = await impactPreview(
+    clause,
+    deps.store.listRepos(input.workspaceId).map((repo) => {
+      const scan = deps.gov.latestBranchScan(repo.id, true);
+      const facts = scan?.facts ? { sqlTables: scan.facts.sqlTables ?? [], astFindings: scan.facts.astFindings ?? [] } : null;
+      return { repoId: repo.id, repoName: repo.fullName, scan: scan && facts ? { id: scan.id, commitSha: scan.commitSha, finishedAt: scan.finishedAt, facts } : null };
+    })
+  );
+  const impact: AnalyzedRule['impact'] = preview
+    .filter((r) => r.failures !== null)
+    .map((r) => ({ repoId: r.repoId, repoFullName: r.repoName, commitSha: r.commitSha ?? '', scannedAt: r.scannedAt, failing: r.failures ?? 0, locations: r.places.slice(0, 20) }));
+
+  return {
+    category,
+    categoryLabel: CATEGORY_LABELS[category],
+    inferredCategory: inferred,
+    value,
+    ai: card.aiCall,
+    highlights: analyzeHighlights(text, value.status === 'confirmed' ? value.quote : null),
+    plainReading: plainReading(clause),
+    reviewNotes: clause.deontic.extractionProvenance?.reviewNotes ?? [],
+    impact,
+    compiled: { smtLib2: clause.compiled.smtLib2Snippet, rego: clause.compiled.opaRegoRule, formula: clause.compiled.deonticFormula },
+    openValues: card.values.filter((v) => v.field !== field && v.source === 'question'),
+    questions: card.questions,
+  };
 }

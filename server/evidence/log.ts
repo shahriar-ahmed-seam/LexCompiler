@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import type { Db } from '../db/index.js';
 import type { AttestationAlgorithm, AttestationSigner } from '../enterprise/attestationSigner.js';
+import { getAttestationSigningKey } from '../enterprise/signingKey.js';
 import { requestTimestamp } from '../enterprise/timestamp.js';
 
 /**
@@ -10,7 +11,10 @@ import { requestTimestamp } from '../enterprise/timestamp.js';
  *   SHA-256 and the body's SHA-256, and is signed;
  * - the body holds the details.
  * A share link can then include every header of a period (so nothing can be removed unseen)
- * and only the bodies about that customer.
+ * and only the bodies about that customer. The database refuses UPDATE and DELETE on the table.
+ *
+ * The end of this file keeps the API of the product dashboard's evidence log working
+ * (EvidenceEntry, ChainCheck, toEntry, verifyEntries, list, count, verify) over this engine.
  */
 
 export const sha256 = (s: string | Buffer) => crypto.createHash('sha256').update(s).digest('hex');
@@ -30,10 +34,13 @@ export function canonicalJson(value: unknown): string {
 export type EvidenceType =
   | 'scan.completed'
   | 'rule.approved'
+  | 'rule.rejected'
   | 'rule.retired'
   | 'rule.rescheduled'
+  | 'exception.requested'
   | 'exception.approved'
   | 'exception.rejected'
+  | 'exception.revoked'
   | 'exception.expired'
   | 'share.created'
   | 'share.revoked';
@@ -181,6 +188,25 @@ export class EvidenceLog {
       .filter((k): k is NonNullable<typeof k> => !!k)
       .map((k) => ({ keyId: k.keyId, algorithm: k.algorithm, publicKeyPem: k.publicKeyPem, validFrom: firstUse.get(k.keyId) ?? k.firstUsedAt, validTo: revokedKeyIds.get(k.keyId) ?? null }));
   }
+
+  /** Records as entries (parsed header and body as well as their exact text), in order. `latest` keeps the newest N. */
+  list(workspaceId: string, options: { from?: string; to?: string; latest?: number } = {}): EvidenceEntry[] {
+    const entries = this.records(workspaceId, { from: options.from, to: options.to }).map(toEntry);
+    return options.latest ? entries.slice(-options.latest) : entries;
+  }
+
+  count(workspaceId: string): number {
+    return Number((this.db.prepare('SELECT COUNT(*) AS n FROM evidence WHERE workspace_id = ?').get(workspaceId) as Row).n);
+  }
+
+  /**
+   * The server's own check of a workspace's whole chain, with bodies. Pass the keys the
+   * workspace publishes (`keysFor`); without them, the keys that signed here and are known to
+   * this log (the current signer) are used.
+   */
+  async verify(workspaceId: string, keys?: Array<Pick<PublicKeyEntry, 'keyId' | 'publicKeyPem'> & { algorithm?: AttestationAlgorithm }>): Promise<ChainCheck> {
+    return verifyEntries(this.list(workspaceId), keys ?? (await this.publicKeys(workspaceId, [], new Map())));
+  }
 }
 
 /**
@@ -208,4 +234,69 @@ export function verifyRecords(records: Array<Pick<EvidenceRecord, 'header' | 'si
     prevSeq = h.seq;
   }
   return problems;
+}
+
+/* ---- Compatibility with the product dashboard's evidence API ---- */
+
+/** A record with its header and body parsed, next to their exact signed text. */
+export interface EvidenceEntry {
+  seq: number;
+  header: EvidenceHeader;
+  /** The exact signed text of the header. */
+  headerJson: string;
+  headerSha256: string;
+  bodyJson: string;
+  body: Record<string, unknown>;
+  /** Base64 signature over headerJson. */
+  signature: string;
+}
+
+/** The result of checking a chain: problems found, keys offered, and the last header's hash. */
+export interface ChainCheck {
+  ok: boolean;
+  count: number;
+  problems: string[];
+  keyIds: string[];
+  lastHeaderSha256: string | null;
+  checkedAt: string;
+}
+
+export function toEntry(r: EvidenceRecord): EvidenceEntry {
+  return {
+    seq: r.seq,
+    header: JSON.parse(r.header) as EvidenceHeader,
+    headerJson: r.header,
+    headerSha256: r.headerSha256,
+    bodyJson: r.body,
+    body: JSON.parse(r.body) as Record<string, unknown>,
+    signature: r.signature,
+  };
+}
+
+/**
+ * Checks signatures (Ed25519 or ECDSA P-256), the sequence, the hash chain and, unless
+ * `bodies: false`, each body given against its header. A record without `bodyJson` (a body not
+ * in a share) is checked by its header only. Keys without an algorithm are Ed25519.
+ */
+export function verifyEntries(
+  entries: Array<{ headerJson: string; signature: string; bodyJson?: string | null }>,
+  keys: Array<{ keyId: string; publicKeyPem: string; algorithm?: AttestationAlgorithm }>,
+  options: { bodies?: boolean } = {}
+): ChainCheck {
+  const entriesKeys: PublicKeyEntry[] = keys.map((k) => ({ keyId: k.keyId, algorithm: k.algorithm ?? 'Ed25519', publicKeyPem: k.publicKeyPem, validFrom: '', validTo: null }));
+  const records = entries.map((e) => ({ header: e.headerJson, signature: e.signature, body: options.bodies !== false && e.bodyJson ? e.bodyJson : undefined }));
+  const problems = verifyRecords(records, entriesKeys).map((p) => p.replace(/^body #(\d+): /, '#$1: body '));
+  const last = entries.at(-1);
+  return { ok: problems.length === 0, count: entries.length, problems, keyIds: entriesKeys.map((k) => k.keyId), lastHeaderSha256: last ? sha256(last.headerJson) : null, checkedAt: new Date().toISOString() };
+}
+
+/**
+ * The server-wide attestation key that the product dashboard's earlier log signed every
+ * workspace's records with (key id `ed25519:<first 16 hex of its fingerprint>`). Add it to the
+ * `known` keys of `publicKeys` so those records still verify; it is listed only for a workspace
+ * whose headers name it.
+ */
+export function legacyAttestationKey(): { keyId: string; algorithm: AttestationAlgorithm; publicKeyPem: string; firstUsedAt: string } {
+  const key = getAttestationSigningKey();
+  return { keyId: `ed25519:${key.fingerprintSha256.slice(0, 16)}`, algorithm: 'Ed25519', publicKeyPem: key.publicKeyPem, firstUsedAt: new Date(0).toISOString() };
 }
