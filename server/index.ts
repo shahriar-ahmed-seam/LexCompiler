@@ -6,12 +6,18 @@ import { OidcProvider, oidcConfigFromEnv } from './auth/oidc.js';
 import { dataDir, getDb } from './db/index.js';
 import { createAuthenticator, createProductRouter } from './product/router.js';
 import { databaseSessionStore, ProductStore, StoreError, type Repo } from './product/store.js';
+import { GovernanceStore } from './product/governance.js';
+import type { FlowDeps } from './product/flows.js';
+import { expireExceptions, requestFromCheckRun } from './product/flows.js';
+import { mountWorkspaceRoutes } from './product/workspaceRoutes.js';
+import { createPublicRoutes } from './product/publicRoutes.js';
+import { createGovernanceJobHandlers } from './github/governanceJobs.js';
 import { lexcompilerVersion } from './util/versions.js';
 import { GitHubApp, githubUrls } from './github/client.js';
 import { loadGitHubAppCredentials } from './github/credentials.js';
 import { createBrowserAuth, createGitHubApiRouter, createGitHubRoutes } from './github/routes.js';
 import { createScanJobHandler } from './github/scanJob.js';
-import { createCommentJobHandler, rerunCheckForException } from './github/exceptions.js';
+import { createCommentJobHandler } from './github/exceptions.js';
 import { createWebhookHandler, enqueueScan } from './github/webhooks.js';
 import { JobQueue } from './jobs/queue.js';
 import path from 'node:path';
@@ -44,7 +50,7 @@ import {
 import { getMcpServersCatalog, handleMcpMessage, invokeMcpTool } from './mcp/mcpSuite.js';
 import { createWorkspaceMcpRouter } from './mcp/workspaceServer.js';
 import { createOAuthRouter } from './mcp/oauth.js';
-import { EvidenceLog } from './evidence/log.js';
+import { EvidenceLog, legacyAttestationKey } from './evidence/log.js';
 import { EvidenceRecorder } from './evidence/records.js';
 import { workspaceSigners } from './evidence/signer.js';
 import { AiGateway, getAiGateway } from './ai/gateway.js';
@@ -122,8 +128,8 @@ assertSafeBindConfig(securityConfig);
 
 const app = express();
 // Behind a reverse proxy or tunnel (Phase 7): trust its X-Forwarded-* headers so req.ip, req.secure
-// and rate limits see the real client. LEXCOMPILER_TRUST_PROXY=loopback for Caddy on the same host.
-const trustProxy = trustProxySetting(process.env.LEXCOMPILER_TRUST_PROXY);
+// and rate limits see the real client. Defaults to loopback (a proxy or tunnel on this machine); set LEXCOMPILER_TRUST_PROXY to a hop count or list for another setup.
+const trustProxy = trustProxySetting(process.env.LEXCOMPILER_TRUST_PROXY || 'loopback');
 if (trustProxy !== undefined) app.set('trust proxy', trustProxy);
 app.use(
   cors({
@@ -137,8 +143,10 @@ const productStore = new ProductStore(getDb());
 const publicUrl = (process.env.LEXCOMPILER_PUBLIC_URL || `http://localhost:${securityConfig.port}`).replace(/\/+$/, '');
 // HTTPS only when the public URL is https (redirect plain HTTP, send HSTS). Needs the proxy to be
 // trusted, or every request would look like plain HTTP.
+// The loopback default only serves req.ip and rate limits: redirects need LEXCOMPILER_TRUST_PROXY set
+// explicitly, since a proxy that is not on loopback would otherwise be redirected in a loop.
 if (publicUrl.startsWith('https://')) {
-  if (trustProxy === undefined) console.warn('[security] LEXCOMPILER_PUBLIC_URL is https but LEXCOMPILER_TRUST_PROXY is not set; HTTPS redirects are off.');
+  if (trustProxySetting(process.env.LEXCOMPILER_TRUST_PROXY) === undefined) console.warn('[security] LEXCOMPILER_PUBLIC_URL is https but LEXCOMPILER_TRUST_PROXY is not set; HTTPS redirects are off.');
   else app.use(httpsOnly(publicUrl));
 }
 // Per-IP limits on the routes anyone can reach (Phase 7): webhooks, share pages and keys, sign-in.
@@ -151,8 +159,8 @@ const limits = Object.fromEntries(
     .map(([k, v]) => [k, Number(v)])
 ) as Record<string, number>;
 app.use('/api/github/webhooks', rateLimit({ name: 'webhooks', windowMs: 60_000, max: limits.webhooks ?? 600 }));
-app.use(['/api/share', '/.well-known/lexcompiler'], rateLimit({ name: 'share links', windowMs: 60_000, max: limits.share ?? 120 }));
-app.use(['/api/auth/login', '/api/auth/callback'], rateLimit({ name: 'sign-in', windowMs: 60_000, max: limits.signin ?? 30 }));
+app.use(['/api/share', '/api/public/share', '/.well-known/lexcompiler'], rateLimit({ name: 'share links', windowMs: 60_000, max: limits.share ?? 120 }));
+app.use(['/api/auth/login', '/api/auth/callback', '/api/auth/password'], rateLimit({ name: 'sign-in', windowMs: 60_000, max: limits.signin ?? 30 }));
 const ghUrls = githubUrls();
 let githubApp: GitHubApp | null = null;
 try {
@@ -177,15 +185,24 @@ if (githubApp && process.env.LEXCOMPILER_GITHUB_SYNC_WEBHOOK === '1' && process.
 const evidenceLog = new EvidenceLog(getDb(), workspaceSigners(dataDir()));
 const evidence = new EvidenceRecorder(evidenceLog, productStore);
 const keysFor = (workspaceId: string) =>
-  evidenceLog.publicKeys(workspaceId, trustedKeys(), new Map(revocations().keys.map((k) => [k.keyId, k.revokedAt])));
-const jobQueue = new JobQueue(
+  evidenceLog.publicKeys(workspaceId, [...trustedKeys(), legacyAttestationKey()], new Map(revocations().keys.map((k) => [k.keyId, k.revokedAt])));
+const governance = new GovernanceStore(getDb(), productStore);
+const commentJob = createCommentJobHandler({ getApp: getGitHubApp });
+const flowDeps: FlowDeps = { store: productStore, gov: governance, evidence, queue: null, publicUrl };
+const jobQueue: JobQueue = new JobQueue(
   getDb(),
-  { scan: createScanJobHandler({ store: productStore, getApp: getGitHubApp, publicUrl, evidence, ai: new AiGateway(getDb()) }), github_comment: createCommentJobHandler({ getApp: getGitHubApp }) },
+  {
+    scan: createScanJobHandler({ store: productStore, getApp: getGitHubApp, publicUrl, evidence, ai: new AiGateway(getDb()) }),
+    github_comment: commentJob,
+    pr_comment: commentJob,
+    ...createGovernanceJobHandlers({ store: productStore, getApp: getGitHubApp, queue: () => jobQueue }),
+  },
   { onError: (err, job) => console.error(`[jobs] ${job.kind} ${job.id} attempt ${job.attempt} failed: ${err instanceof Error ? err.message : String(err)}`) }
 );
+flowDeps.queue = jobQueue;
 // The webhook needs the raw body to check GitHub's signature, so it is registered before
 // express.json() and the /api guard (GitHub sends no browser headers).
-app.post('/api/github/webhooks', express.raw({ type: () => true, limit: '25mb' }), createWebhookHandler({ store: productStore, getApp: getGitHubApp, queue: jobQueue, relayReencoded: process.env.LEXCOMPILER_GITHUB_WEBHOOK_RELAY === 'smee' }));
+app.post('/api/github/webhooks', express.raw({ type: () => true, limit: '25mb' }), createWebhookHandler({ store: productStore, getApp: getGitHubApp, queue: jobQueue, onRequestException: (input) => requestFromCheckRun(flowDeps, input), relayReencoded: process.env.LEXCOMPILER_GITHUB_WEBHOOK_RELAY === 'smee' }));
 /** A repository's files at a commit: the local folder, or GitHub's archive with the installation token. */
 const openFixPr = async (repo: Repo, requestedBy: string) => {
   const gh = getGitHubApp();
@@ -223,24 +240,28 @@ app.use(
     store: productStore,
     security: securityConfig,
     readRepoFiles,
+    flows: flowDeps,
     resourceMetadataUrl: `${publicUrl}/.well-known/oauth-protected-resource`,
   })
 );
 app.use(express.json({ limit: '5mb' }));
-const oidcProvider = oidcConfig ? new OidcProvider(oidcConfig, databaseSessionStore(productStore)) : null;
+// Auditor share pages (the web app's view): no account, the share token is the credential.
+app.use(createPublicRoutes({ store: productStore, log: evidenceLog, keysFor, publicUrl }));
+const sessionStore = databaseSessionStore(productStore);
+const oidcProvider = oidcConfig ? new OidcProvider(oidcConfig, sessionStore) : null;
+const signInRequired = Boolean(oidcProvider) || securityConfig.passwordSignIn;
+// One sessions-aware browser auth for the OAuth consent pages and the GitHub pages.
+const browserAuth = createBrowserAuth(oidcProvider, { sessions: sessionStore, signInRequired });
 // OAuth for the MCP endpoint (Phase 4a): metadata, client registration, consent and tokens,
 // with the dashboard's sign-in. Outside the /api guard.
 app.use(['/oauth', '/.well-known/oauth-protected-resource', '/.well-known/oauth-authorization-server'], rateLimit({ name: 'oauth', windowMs: 60_000, max: limits.oauth ?? 60 }));
-{
-  const browserAuth = createBrowserAuth(oidcProvider);
-  app.use(createOAuthRouter({ store: productStore, db: getDb(), publicUrl, principal: (req) => browserAuth.principal(req), loginUrl: browserAuth.loginUrl }));
-}
+app.use(createOAuthRouter({ store: productStore, db: getDb(), publicUrl, principal: (req) => browserAuth.principal(req), loginUrl: browserAuth.loginUrl }));
 // Expired sessions are also dropped when read; this keeps the table small.
 productStore.purgeExpiredSessions();
 setInterval(() => productStore.purgeExpiredSessions(), 60 * 60 * 1000).unref();
 // Resolve the build id once at startup (one git call), not on the first scan request.
 lexcompilerVersion();
-app.use('/api', createApiGuard(securityConfig, oidcProvider ? createAuthenticator(oidcProvider, securityConfig.apiToken) : undefined));
+app.use('/api', createApiGuard(securityConfig, signInRequired ? createAuthenticator(oidcProvider, securityConfig.apiToken, sessionStore) : undefined));
 app.use(
   '/api',
   createProductRouter(productStore, oidcProvider, {
@@ -250,9 +271,12 @@ app.use(
       repo.githubRepoId !== null && repo.installationId !== null
         ? enqueueScan({ queue: jobQueue }, { githubRepoId: repo.githubRepoId, installationId: repo.installationId, kind: 'push', trigger: 'rule_approved' }, `rule:${version.id}:${repo.id}`)
         : null,
-    onExceptionDecided: (exception) => rerunCheckForException({ store: productStore, queue: jobQueue }, exception),
     mcpUrl: `${publicUrl}/mcp`,
     evidence,
+    flows: flowDeps,
+    keysFor,
+    ai: getAiGateway(),
+    passwordSignIn: securityConfig.passwordSignIn,
     publicUrl,
     readRepoFiles,
     refreshFeed: () => refreshRegulatoryFeed(productStore),
@@ -261,15 +285,22 @@ app.use(
       runs: crewRuns,
       run: (repo, opts) => runWorkspaceCrew({ store: productStore, runs: crewRuns, readHead: readRepoHead, openFixPr: getGitHubApp() ? openFixPr : undefined, ai: getAiGateway() }, repo, opts),
     },
+    extra: (r, helpers) =>
+      mountWorkspaceRoutes(r, helpers, {
+        store: productStore,
+        gov: governance,
+        ai: getAiGateway(),
+        passwordSignIn: securityConfig.passwordSignIn,
+        secureCookies: publicUrl.startsWith('https://'),
+        allowedOrigins: securityConfig.allowedOrigins,
+      }),
   })
 );
-// Expires exceptions whose date has passed. Scans already ignore them; this keeps the inbox and
-// the evidence accurate.
-const expireAndRecord = async () => {
-  for (const e of productStore.expireExceptionRecords()) await evidence.exceptionChanged(e);
-};
-void expireAndRecord().catch((err) => console.error(`[evidence] ${err instanceof Error ? err.message : String(err)}`));
-setInterval(() => void expireAndRecord().catch((err) => console.error(`[evidence] ${err instanceof Error ? err.message : String(err)}`)), 60 * 60 * 1000).unref();
+// Approved exceptions past their date expire (one sweep: at startup and every 10 minutes); affected
+// pull requests are re-checked and each expiry is recorded as evidence.
+const sweepExceptions = () => void expireExceptions(flowDeps).catch((err) => console.error(`[exceptions] ${err instanceof Error ? err.message : String(err)}`));
+sweepExceptions();
+setInterval(sweepExceptions, 10 * 60 * 1000).unref();
 // Daily jobs (Phase 6): the regulation feed, and a scan of every repository's default branch
 // (GitHub repositories through the job queue). Checked hourly; each runs once a day, across restarts.
 // LEXCOMPILER_SCHEDULER=off turns them off.
@@ -1280,7 +1311,7 @@ app.use(
     onRegistered: (credentials) => {
       githubApp = new GitHubApp(credentials, ghUrls);
     },
-    auth: createBrowserAuth(oidcProvider),
+    auth: browserAuth,
     publicUrl,
     urls: ghUrls,
     webhookUrl: process.env.LEXCOMPILER_GITHUB_WEBHOOK_URL || `${publicUrl}/api/github/webhooks`,
@@ -1305,6 +1336,6 @@ jobQueue.start();
 app.listen(securityConfig.port, securityConfig.host, () => {
   console.log(
     `[LexCompiler Server] Neuro-Symbolic Law-to-AST Engine listening on http://${securityConfig.host}:${securityConfig.port}` +
-      (securityConfig.apiToken ? ' (API token required)' : ' (loopback only)')
+      (signInRequired ? ` (sign-in required: ${oidcProvider ? 'OIDC' : 'email and password'})` : securityConfig.apiToken ? ' (API token required)' : ' (loopback only)')
   );
 });

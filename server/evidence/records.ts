@@ -82,16 +82,31 @@ export class EvidenceRecorder {
     });
   }
 
+  /** A draft version Legal turned down (nothing changes in checks; the decision is still on record). */
+  async ruleRejected(workspaceId: string, rule: Rule, version: RuleVersion, userId: string) {
+    return this.log.append(workspaceId, 'rule.rejected', {
+      ruleIds: [rule.id],
+      repoIds: [],
+      ruleKey: rule.key,
+      versionId: version.id,
+      version: version.version,
+      title: version.clause.title,
+      citation: version.clause.citation,
+      sourceTextSha256: sha256(version.sourceText),
+      clauseSha256: version.clauseSha256,
+      rejectedBy: this.who(userId),
+      rejectedAt: version.approvedAt,
+      note: version.decisionNote,
+    });
+  }
+
   async ruleRetired(workspaceId: string, rule: Rule, userId: string) {
     return this.log.append(workspaceId, 'rule.retired', { ruleIds: [rule.id], repoIds: [], ruleKey: rule.key, title: rule.title, retiredAt: rule.retiredAt, retiredBy: this.who(userId) });
   }
 
-  /** An exception approved, rejected or expired, by its current status. */
-  async exceptionChanged(exception: ExceptionRecord) {
-    const type: EvidenceType | null =
-      exception.status === 'approved' ? 'exception.approved' : exception.status === 'rejected' ? 'exception.rejected' : exception.status === 'expired' ? 'exception.expired' : null;
-    if (!type) return null;
-    return this.log.append(exception.workspaceId, type, {
+  /** The fields every exception body carries (fingerprints and locations, never code). */
+  private exceptionBody(exception: ExceptionRecord) {
+    return {
       ruleIds: [exception.ruleId],
       repoIds: exception.repoId ? [exception.repoId] : [],
       exceptionId: exception.id,
@@ -104,19 +119,66 @@ export class EvidenceRecorder {
       pullRequest: exception.prNumber,
       reason: exception.reason,
       requestedBy: this.who(exception.requestedBy),
+      requesterLabel: exception.requesterLabel,
       requestedFrom: exception.requestedFrom,
       requestedAt: exception.requestedAt,
+    };
+  }
+
+  /** A new exception request (from the check run's button, the dashboard or a coding assistant). */
+  async exceptionRequested(exception: ExceptionRecord) {
+    return this.log.append(exception.workspaceId, 'exception.requested', {
+      ...this.exceptionBody(exception),
+      requestedUntil: exception.requestedUntil,
+      status: exception.status,
+    });
+  }
+
+  /** An exception approved, rejected, expired or revoked, by its current status. */
+  async exceptionChanged(exception: ExceptionRecord) {
+    const type: EvidenceType | null =
+      exception.status === 'approved'
+        ? 'exception.approved'
+        : exception.status === 'rejected'
+          ? 'exception.rejected'
+          : exception.status === 'expired'
+            ? 'exception.expired'
+            : exception.status === 'revoked'
+              ? 'exception.revoked'
+              : null;
+    if (!type) return null;
+    return this.log.append(exception.workspaceId, type, {
+      ...this.exceptionBody(exception),
       decidedBy: this.who(exception.decidedBy),
       decidedAt: exception.decidedAt,
       decisionNote: exception.decisionNote,
       expiresAt: exception.expiresAt,
       status: exception.status,
+      // A revoke records the revoker as the decider (ProductStore.revokeException).
+      revokedBy: exception.status === 'revoked' ? this.who(exception.decidedBy) : undefined,
     });
   }
 
-  async shareChanged(share: ShareRecord, change: 'created' | 'revoked') {
+  /** An approved exception withdrawn before its end date, by `userId`, with an optional note. */
+  async exceptionRevoked(exception: ExceptionRecord, userId: string, note?: string | null) {
+    return this.log.append(exception.workspaceId, 'exception.revoked', {
+      ...this.exceptionBody(exception),
+      decidedBy: this.who(exception.decidedBy),
+      decidedAt: exception.decidedAt,
+      decisionNote: exception.decisionNote,
+      expiresAt: exception.expiresAt,
+      status: 'revoked',
+      revokedBy: this.who(userId),
+      revokedAt: exception.decidedAt,
+      note: note?.trim() || null,
+    });
+  }
+
+  /** A share link created or revoked; `userId` (who revoked it) is recorded as `revokedBy`. */
+  async shareChanged(share: ShareRecord, change: 'created' | 'revoked', userId?: string | null) {
     return this.log.append(share.workspaceId, change === 'created' ? 'share.created' : 'share.revoked', {
-      ruleIds: share.ruleIds,
+      // No ruleIds: share records name counterparties and people, so no other share's view may include them.
+      ruleIds: [],
       repoIds: [],
       shareId: share.id,
       label: share.label,
@@ -126,6 +188,7 @@ export class EvidenceRecorder {
       expiresAt: share.expiresAt,
       createdBy: this.who(share.createdBy),
       revokedAt: share.revokedAt,
+      revokedBy: change === 'revoked' && userId ? this.who(userId) : undefined,
     });
   }
 }

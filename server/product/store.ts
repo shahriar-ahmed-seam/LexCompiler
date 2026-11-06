@@ -215,19 +215,25 @@ export interface ExceptionRecord {
   workspaceId: string;
   ruleId: string;
   ruleKey: string;
+  ruleTitle: string | null;
   repoId: string | null;
   repoName: string | null;
+  /** Same as repoName (the name Shahriar's dashboard reads). */
+  repoFullName: string | null;
   fingerprint: string | null;
   pathGlob: string | null;
   reason: string;
   /** A user id, or "github:<login>" for a request made with the check run's button. */
   requestedBy: string;
+  /** How the requester is shown, e.g. "Tanvir Rahman via Kiro" or "@tanvir". */
+  requesterLabel: string | null;
   requestedFrom: ExceptionSource;
   requestedAt: string;
   /** The end date the requester asked for; Legal sets the real one when approving. */
   requestedUntil: string | null;
   status: ExceptionStatus;
   decidedBy: string | null;
+  decidedByName: string | null;
   decidedAt: string | null;
   decisionNote: string | null;
   expiresAt: string | null;
@@ -247,11 +253,17 @@ export interface ApiTokenRecord {
   id: string;
   workspaceId: string;
   userId: string;
+  userName: string | null;
   name: string;
+  /** The token's last four characters, for recognising it; null for tokens made before hints were kept. */
+  hint: string | null;
   createdAt: string;
   expiresAt: string;
   lastUsedAt: string | null;
+  /** The MCP client name the token last connected with. */
+  lastClient: string | null;
   revokedAt: string | null;
+  status: 'active' | 'expired' | 'revoked';
 }
 /** Who a token acts as: one user in one workspace, with that user's current role. */
 export interface TokenPrincipal {
@@ -266,15 +278,27 @@ export interface McpCallRecord {
   id: string;
   workspaceId: string;
   tokenId: string | null;
+  userId: string | null;
+  userName: string | null;
+  client: string | null;
   method: string;
   tool: string | null;
   repo: string | null;
   outcome: McpCallOutcome;
+  /** One line of what happened, for the dashboard. */
+  summary: string | null;
   durationMs: number;
   /** File paths and fingerprints only; sent code is never stored. */
   detail: Record<string, unknown> | null;
   createdAt: string;
 }
+/** What recordMcpCall takes: the person, client and summary are optional (the person defaults to the token's owner). */
+export type McpCallInput = Omit<McpCallRecord, 'id' | 'createdAt' | 'userId' | 'userName' | 'client' | 'summary' | 'detail'> & {
+  userId?: string | null;
+  client?: string | null;
+  summary?: string | null;
+  detail?: Record<string, unknown> | null;
+};
 
 /** A read-only link for an auditor (product guide, Phase 5). Only the token's SHA-256 is stored. */
 export const SHARE_TOKEN_PREFIX = 'lexc_share_';
@@ -288,10 +312,22 @@ export interface ShareRecord {
   periodFrom: string;
   periodTo: string;
   createdBy: string;
+  createdByName: string | null;
   createdAt: string;
   expiresAt: string;
   revokedAt: string | null;
   views: number;
+  lastViewedAt: string | null;
+  status: 'active' | 'expired' | 'revoked';
+}
+
+/** The newest completed scan of a repository's default branch. */
+export interface BranchScanRecord {
+  id: string;
+  repoId: string;
+  commitSha: string;
+  finishedAt: string | null;
+  conclusion: string | null;
 }
 
 export class ProductStore {
@@ -379,18 +415,18 @@ export class ProductStore {
   }
 
   findWorkspaceByName(name: string): Workspace | undefined {
-    const r = this.db.prepare('SELECT id FROM workspaces WHERE name = ? ORDER BY created_at LIMIT 1').get(name) as Row | undefined;
+    const r = this.db.prepare('SELECT id FROM workspaces WHERE name = ? AND archived_at IS NULL ORDER BY created_at LIMIT 1').get(name) as Row | undefined;
     return r ? this.getWorkspace(String(r.id)) : undefined;
   }
 
   listWorkspaces(): Workspace[] {
-    return (this.db.prepare('SELECT id FROM workspaces ORDER BY created_at').all() as Row[]).map((r) => this.getWorkspace(String(r.id))!);
+    return (this.db.prepare('SELECT id FROM workspaces WHERE archived_at IS NULL ORDER BY created_at').all() as Row[]).map((r) => this.getWorkspace(String(r.id))!);
   }
 
   listWorkspacesForUser(userId: string): Array<Workspace & { role: WorkspaceRole }> {
     const rows = this.db
       .prepare(
-        'SELECT w.id, m.role FROM workspaces w JOIN memberships m ON m.workspace_id = w.id WHERE m.user_id = ? ORDER BY w.created_at'
+        'SELECT w.id, m.role FROM workspaces w JOIN memberships m ON m.workspace_id = w.id WHERE m.user_id = ? AND w.archived_at IS NULL ORDER BY w.created_at'
       )
       .all(userId) as Row[];
     return rows.map((r) => ({ ...this.getWorkspace(String(r.id))!, role: r.role as WorkspaceRole }));
@@ -1121,18 +1157,23 @@ export class ProductStore {
       id: String(r.id),
       workspaceId: String(r.workspace_id),
       ruleId: String(r.rule_id),
-      ruleKey: String(r.rule_key ?? ''),
+      ruleKey: String(r.effective_rule_key ?? r.rule_key ?? ''),
+      ruleTitle: str(r.rule_title),
       repoId: str(r.repo_id),
       repoName: str(r.full_name),
+      repoFullName: str(r.full_name),
       fingerprint: str(r.fingerprint),
       pathGlob: str(r.path_glob),
       reason: String(r.reason),
       requestedBy: String(r.requested_by),
-      requestedFrom: (str(r.requested_from) ?? 'dashboard') as ExceptionSource,
+      requesterLabel: str(r.requester_label),
+      // Requests logged as 'mcp' before migration 17 read as 'assistant'.
+      requestedFrom: (str(r.requested_from) === 'mcp' ? 'assistant' : (str(r.requested_from) ?? 'dashboard')) as ExceptionSource,
       requestedAt: String(r.requested_at),
       requestedUntil: str(r.requested_until),
       status: r.status as ExceptionStatus,
       decidedBy: str(r.decided_by),
+      decidedByName: str(r.decided_by_name),
       decidedAt: str(r.decided_at),
       decisionNote: str(r.decision_note),
       expiresAt: str(r.expires_at),
@@ -1146,7 +1187,9 @@ export class ProductStore {
     };
   }
 
-  private static readonly EXCEPTION_SELECT = `SELECT e.*, r.key AS rule_key, p.full_name FROM exceptions e JOIN rules r ON r.id = e.rule_id LEFT JOIN repos p ON p.id = e.repo_id`;
+  /** The rule key stored with the request wins over the rule's (they only differ on old rows). */
+  private static readonly EXCEPTION_SELECT = `SELECT e.*, COALESCE(e.rule_key, r.key) AS effective_rule_key, r.title AS rule_title, p.full_name, d.name AS decided_by_name
+    FROM exceptions e JOIN rules r ON r.id = e.rule_id LEFT JOIN repos p ON p.id = e.repo_id LEFT JOIN users d ON d.id = e.decided_by`;
 
   /**
    * Records a request. A request for a finding that already has an open request or an
@@ -1155,20 +1198,28 @@ export class ProductStore {
   requestException(input: {
     workspaceId: string;
     ruleId: string;
+    /** Defaults to the rule's key. */
+    ruleKey?: string | null;
     repoId: string | null;
     fingerprint?: string | null;
     pathGlob?: string | null;
     reason: string;
     requestedBy: string;
+    /** How the requester is shown (e.g. "Tanvir Rahman via Kiro"). */
+    requesterLabel?: string | null;
     requestedFrom: ExceptionSource;
     requestedUntil?: string | null;
     scan?: { id: string; prNumber: number | null; headSha: string; baseSha: string | null } | null;
+    /** The pull request, when it is known without a stored scan. */
+    prNumber?: number | null;
     finding?: { filePath: string; startLine: number; message: string } | null;
   }): { exception: ExceptionRecord; created: boolean } {
     const fingerprint = input.fingerprint || null;
     const pathGlob = input.pathGlob?.trim() || null;
     if (!fingerprint === !pathGlob) throw new StoreError('an exception covers either one finding (fingerprint) or a path glob');
-    if (!this.db.prepare('SELECT 1 FROM rules WHERE id = ? AND workspace_id = ?').get(input.ruleId, input.workspaceId)) throw new StoreError('unknown rule', 404);
+    const rule = this.db.prepare('SELECT key FROM rules WHERE id = ? AND workspace_id = ?').get(input.ruleId, input.workspaceId) as Row | undefined;
+    if (!rule) throw new StoreError('unknown rule', 404);
+    const ruleKey = input.ruleKey?.trim() || String(rule.key);
     const reason = input.reason.trim().slice(0, 2000);
     if (!reason) throw new StoreError('a reason is required');
     const now = nowIso();
@@ -1183,8 +1234,8 @@ export class ProductStore {
     this.db
       .prepare(
         `INSERT INTO exceptions (id, workspace_id, rule_id, repo_id, fingerprint, path_glob, reason, requested_by, requested_from, requested_at, status,
-           scan_id, pr_number, head_sha, base_sha, file_path, start_line, message, requested_until)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'requested', ?, ?, ?, ?, ?, ?, ?, ?)`
+           scan_id, pr_number, head_sha, base_sha, file_path, start_line, message, requested_until, rule_key, requester_label)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'requested', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         id,
@@ -1198,13 +1249,15 @@ export class ProductStore {
         input.requestedFrom,
         now,
         input.scan?.id ?? null,
-        input.scan?.prNumber ?? null,
+        input.scan?.prNumber ?? input.prNumber ?? null,
         input.scan?.headSha ?? null,
         input.scan?.baseSha ?? null,
         input.finding?.filePath ?? null,
         input.finding?.startLine ?? null,
         input.finding?.message.slice(0, 2000) ?? null,
-        input.requestedUntil ?? null
+        input.requestedUntil ?? null,
+        ruleKey,
+        input.requesterLabel?.trim().slice(0, 200) || null
       );
     return { exception: this.getException(input.workspaceId, id)!, created: true };
   }
@@ -1214,10 +1267,11 @@ export class ProductStore {
     return r ? this.exceptionFrom(r) : undefined;
   }
 
-  listExceptions(workspaceId: string, options: { status?: ExceptionStatus } = {}): ExceptionRecord[] {
-    const rows = options.status
-      ? (this.db.prepare(`${ProductStore.EXCEPTION_SELECT} WHERE e.workspace_id = ? AND e.status = ? ORDER BY e.requested_at DESC`).all(workspaceId, options.status) as Row[])
-      : (this.db.prepare(`${ProductStore.EXCEPTION_SELECT} WHERE e.workspace_id = ? ORDER BY e.requested_at DESC`).all(workspaceId) as Row[]);
+  /** A workspace's exceptions, newest first; `status` is one status or several. */
+  listExceptions(workspaceId: string, options: { status?: ExceptionStatus | ExceptionStatus[] } = {}): ExceptionRecord[] {
+    const statuses = options.status === undefined ? [] : Array.isArray(options.status) ? options.status : [options.status];
+    const filter = statuses.length ? ` AND e.status IN (${statuses.map(() => '?').join(', ')})` : '';
+    const rows = this.db.prepare(`${ProductStore.EXCEPTION_SELECT} WHERE e.workspace_id = ?${filter} ORDER BY e.requested_at DESC`).all(workspaceId, ...statuses) as Row[];
     return rows.map((r) => this.exceptionFrom(r));
   }
 
@@ -1254,6 +1308,17 @@ export class ProductStore {
     if (!e) throw new StoreError('unknown exception', 404);
     if (e.status !== 'approved' && e.status !== 'expired') throw new StoreError('only approved exceptions have an expiry', 409);
     this.db.prepare("UPDATE exceptions SET expires_at = ?, status = 'approved' WHERE id = ?").run(new Date(expiresAt).toISOString(), id);
+    return this.getException(workspaceId, id)!;
+  }
+
+  /** Legal withdraws an approved exception before it expires. The revoker becomes the deciding person. */
+  revokeException(workspaceId: string, id: string, userId: string, note: string, now: Date = new Date()): ExceptionRecord {
+    const e = this.getException(workspaceId, id);
+    if (!e) throw new StoreError('unknown exception', 404);
+    if (e.status !== 'approved') throw new StoreError(`only approved exceptions can be revoked (this one is ${e.status})`, 409);
+    this.db
+      .prepare("UPDATE exceptions SET status = 'revoked', decided_by = ?, decided_at = ?, decision_note = ? WHERE id = ? AND status = 'approved'")
+      .run(userId, now.toISOString(), note.trim().slice(0, 2000) || e.decisionNote, id);
     return this.getException(workspaceId, id)!;
   }
 
@@ -1462,6 +1527,8 @@ export class ProductStore {
   // ---------------------------------------------------------------- share links (Phase 5)
 
   private shareFrom(r: Row): ShareRecord {
+    const revokedAt = str(r.revoked_at);
+    const expiresAt = String(r.expires_at);
     return {
       id: String(r.id),
       workspaceId: String(r.workspace_id),
@@ -1472,15 +1539,32 @@ export class ProductStore {
       periodFrom: String(r.period_from),
       periodTo: String(r.period_to),
       createdBy: String(r.created_by),
+      createdByName: str(r.created_by_name),
       createdAt: String(r.created_at),
-      expiresAt: String(r.expires_at),
-      revokedAt: str(r.revoked_at),
+      expiresAt,
+      revokedAt,
       views: Number(r.views ?? 0),
+      lastViewedAt: str(r.last_viewed_at),
+      status: revokedAt ? 'revoked' : expiresAt <= nowIso() ? 'expired' : 'active',
     };
   }
 
-  private static readonly SHARE_SELECT = `SELECT s.*, c.name AS counterparty_name, (SELECT COUNT(*) FROM share_views v WHERE v.share_id = s.id) AS views
-    FROM shares s LEFT JOIN counterparties c ON c.id = s.counterparty_id`;
+  private static readonly SHARE_SELECT = `SELECT s.*, c.name AS counterparty_name, u.name AS created_by_name,
+      (SELECT COUNT(*) FROM share_views v WHERE v.share_id = s.id) AS views,
+      (SELECT MAX(v.at) FROM share_views v WHERE v.share_id = s.id) AS last_viewed_at
+    FROM shares s LEFT JOIN counterparties c ON c.id = s.counterparty_id LEFT JOIN users u ON u.id = s.created_by`;
+
+  /** Rules a share covers when none are picked: every rule with an approved or retired version. */
+  currentRuleIds(workspaceId: string): string[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT r.id FROM rules r WHERE r.workspace_id = ? AND EXISTS (SELECT 1 FROM rule_versions v WHERE v.rule_id = r.id AND v.status IN ('approved', 'retired'))
+           ORDER BY r.created_at`
+        )
+        .all(workspaceId) as Row[]
+    ).map((r) => String(r.id));
+  }
 
   /**
    * Creates a share of some rules over a period, optionally for one counterparty (whose scope
@@ -1529,7 +1613,7 @@ export class ProductStore {
   revokeShare(workspaceId: string, id: string): ShareRecord {
     const share = this.getShare(workspaceId, id);
     if (!share) throw new StoreError('unknown share', 404);
-    if (share.revokedAt) throw new StoreError('this share is already revoked', 409);
+    if (share.revokedAt) return share;
     this.db.prepare('UPDATE shares SET revoked_at = ? WHERE id = ?').run(nowIso(), id);
     return this.getShare(workspaceId, id)!;
   }
@@ -1551,48 +1635,58 @@ export class ProductStore {
   }
 
   // ---------------------------------------------------------------- API tokens and MCP calls (Phase 4a)
-
   private tokenFrom(r: Row): ApiTokenRecord {
+    const revokedAt = str(r.revoked_at);
+    const expiresAt = String(r.expires_at);
     return {
       id: String(r.id),
       workspaceId: String(r.workspace_id),
       userId: String(r.user_id),
+      userName: str(r.user_name),
       name: String(r.name),
+      hint: str(r.token_hint),
       createdAt: String(r.created_at),
-      expiresAt: String(r.expires_at),
+      expiresAt,
       lastUsedAt: str(r.last_used_at),
-      revokedAt: str(r.revoked_at),
+      lastClient: str(r.last_client),
+      revokedAt,
+      status: revokedAt ? 'revoked' : expiresAt <= nowIso() ? 'expired' : 'active',
     };
+  }
+
+  private static readonly TOKEN_SELECT = 'SELECT t.*, u.name AS user_name FROM api_tokens t LEFT JOIN users u ON u.id = t.user_id';
+
+  private insertApiToken(workspaceId: string, userId: string, name: string, ttlMs: number): { token: string; record: ApiTokenRecord } {
+    const token = API_TOKEN_PREFIX + crypto.randomBytes(32).toString('base64url');
+    const id = newId();
+    const now = new Date();
+    this.db
+      .prepare('INSERT INTO api_tokens (id, workspace_id, user_id, name, token_sha256, token_hint, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(id, workspaceId, userId, name, sha256Hex(token), token.slice(-4), now.toISOString(), new Date(now.getTime() + ttlMs).toISOString());
+    return { token, record: this.getApiToken(workspaceId, id)! };
   }
 
   /**
    * Creates a personal access token for a member of the workspace. The token is returned once;
-   * only its SHA-256 is stored.
+   * only its SHA-256 and its last four characters are stored.
    */
   createApiToken(workspaceId: string, userId: string, name: string, days: number = API_TOKEN_DEFAULT_DAYS): { token: string; record: ApiTokenRecord } {
     if (!this.roleOf(workspaceId, userId)) throw new StoreError('workspace not found', 404);
     const label = name.trim().slice(0, 100);
     if (!label) throw new StoreError('a token needs a name');
     if (!Number.isInteger(days) || days < 1 || days > 366) throw new StoreError('a token lasts between 1 and 366 days');
-    const token = API_TOKEN_PREFIX + crypto.randomBytes(32).toString('base64url');
-    const id = newId();
-    const now = new Date();
-    this.db
-      .prepare('INSERT INTO api_tokens (id, workspace_id, user_id, name, token_sha256, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .run(id, workspaceId, userId, label, sha256Hex(token), now.toISOString(), new Date(now.getTime() + days * 24 * 3600 * 1000).toISOString());
-    return { token, record: this.tokenFrom(this.db.prepare('SELECT * FROM api_tokens WHERE id = ?').get(id) as Row) };
+    return this.insertApiToken(workspaceId, userId, label, days * 24 * 3600 * 1000);
   }
 
   /** A token that lasts `ttlMs` (OAuth access tokens: one hour). */
   createShortLivedApiToken(workspaceId: string, userId: string, name: string, ttlMs: number): { token: string; record: ApiTokenRecord } {
     if (!this.roleOf(workspaceId, userId)) throw new StoreError('workspace not found', 404);
-    const token = API_TOKEN_PREFIX + crypto.randomBytes(32).toString('base64url');
-    const id = newId();
-    const now = new Date();
-    this.db
-      .prepare('INSERT INTO api_tokens (id, workspace_id, user_id, name, token_sha256, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .run(id, workspaceId, userId, name.slice(0, 100), sha256Hex(token), now.toISOString(), new Date(now.getTime() + ttlMs).toISOString());
-    return { token, record: this.tokenFrom(this.db.prepare('SELECT * FROM api_tokens WHERE id = ?').get(id) as Row) };
+    return this.insertApiToken(workspaceId, userId, name.slice(0, 100), ttlMs);
+  }
+
+  getApiToken(workspaceId: string, tokenId: string): ApiTokenRecord | undefined {
+    const r = this.db.prepare(`${ProductStore.TOKEN_SELECT} WHERE t.id = ? AND t.workspace_id = ?`).get(tokenId, workspaceId) as Row | undefined;
+    return r ? this.tokenFrom(r) : undefined;
   }
 
   /** Revokes a token by id, whoever owns it (OAuth rotation and code reuse). */
@@ -1602,25 +1696,43 @@ export class ProductStore {
 
   /** A user's tokens in a workspace, newest first. */
   listApiTokens(workspaceId: string, userId: string): ApiTokenRecord[] {
-    return (this.db.prepare('SELECT * FROM api_tokens WHERE workspace_id = ? AND user_id = ? ORDER BY created_at DESC').all(workspaceId, userId) as Row[]).map((r) => this.tokenFrom(r));
+    return (this.db.prepare(`${ProductStore.TOKEN_SELECT} WHERE t.workspace_id = ? AND t.user_id = ? ORDER BY t.created_at DESC`).all(workspaceId, userId) as Row[]).map((r) =>
+      this.tokenFrom(r)
+    );
   }
 
-  /** Revokes one of the user's own tokens. */
-  revokeApiToken(workspaceId: string, userId: string, tokenId: string): ApiTokenRecord {
-    const r = this.db.prepare('SELECT * FROM api_tokens WHERE id = ? AND workspace_id = ? AND user_id = ?').get(tokenId, workspaceId, userId) as Row | undefined;
-    if (!r) throw new StoreError('unknown token', 404);
-    if (!r.revoked_at) this.db.prepare('UPDATE api_tokens SET revoked_at = ? WHERE id = ?').run(nowIso(), tokenId);
-    return this.tokenFrom(this.db.prepare('SELECT * FROM api_tokens WHERE id = ?').get(tokenId) as Row);
+  /** Every token in a workspace, newest first (for owners). */
+  listAllApiTokens(workspaceId: string): ApiTokenRecord[] {
+    return (this.db.prepare(`${ProductStore.TOKEN_SELECT} WHERE t.workspace_id = ? ORDER BY t.created_at DESC`).all(workspaceId) as Row[]).map((r) => this.tokenFrom(r));
   }
 
   /**
-   * The user and workspace a token acts for, or null when it is unknown, revoked, expired, or its
-   * user is no longer a member. Records the use.
+   * Revokes one of the user's own tokens, or, with `canRevokeOthers` (workspace owners), any
+   * token in the workspace. Someone else's token is "unknown" to a user who may not revoke it.
+   */
+  revokeApiToken(workspaceId: string, userId: string, tokenId: string, options: { canRevokeOthers?: boolean } = {}): ApiTokenRecord {
+    const t = this.getApiToken(workspaceId, tokenId);
+    if (!t || (t.userId !== userId && !options.canRevokeOthers)) throw new StoreError('unknown token', 404);
+    if (!t.revokedAt) this.db.prepare('UPDATE api_tokens SET revoked_at = ? WHERE id = ?').run(nowIso(), tokenId);
+    return this.getApiToken(workspaceId, tokenId)!;
+  }
+
+  /** Remembers the MCP client (clientInfo.name) a token last connected with. */
+  setApiTokenClient(tokenId: string, client: string): void {
+    this.db.prepare('UPDATE api_tokens SET last_client = ? WHERE id = ?').run(client.slice(0, 80), tokenId);
+  }
+
+  /**
+   * The user and workspace a token acts for, or null when it is unknown, revoked, expired, its
+   * workspace is archived, or its user is no longer a member. Records the use.
    */
   tokenPrincipal(token: string, at: Date = new Date()): TokenPrincipal | null {
-    if (!token.startsWith(API_TOKEN_PREFIX)) return null;
+    if (!token.startsWith(API_TOKEN_PREFIX) || token.length > 200) return null;
     const r = this.db
-      .prepare('SELECT t.*, u.oidc_sub FROM api_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_sha256 = ?')
+      .prepare(
+        `SELECT t.*, u.oidc_sub FROM api_tokens t JOIN users u ON u.id = t.user_id JOIN workspaces w ON w.id = t.workspace_id
+         WHERE t.token_sha256 = ? AND w.archived_at IS NULL`
+      )
       .get(sha256Hex(token)) as Row | undefined;
     if (!r || r.revoked_at || String(r.expires_at) <= at.toISOString()) return null;
     const role = this.roleOf(String(r.workspace_id), String(r.user_id));
@@ -1629,33 +1741,51 @@ export class ProductStore {
     return { tokenId: String(r.id), workspaceId: String(r.workspace_id), userId: String(r.user_id), userSub: String(r.oidc_sub), role };
   }
 
-  recordMcpCall(input: Omit<McpCallRecord, 'id' | 'createdAt'>): void {
+  /** Logs one MCP request. Without a userId the token's owner is recorded. */
+  recordMcpCall(input: McpCallInput): void {
     this.db
-      .prepare('INSERT INTO mcp_calls (id, workspace_id, token_id, method, tool, repo, outcome, duration_ms, detail_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .prepare(
+        `INSERT INTO mcp_calls (id, workspace_id, token_id, user_id, client, method, tool, repo, outcome, summary, duration_ms, detail_json, created_at)
+         VALUES (?, ?, ?, COALESCE(?, (SELECT user_id FROM api_tokens WHERE id = ?)), ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
       .run(
         newId(),
         input.workspaceId,
         input.tokenId,
+        input.userId ?? null,
+        input.tokenId,
+        input.client?.slice(0, 80) ?? null,
         input.method.slice(0, 100),
         input.tool?.slice(0, 100) ?? null,
         input.repo?.slice(0, 300) ?? null,
         input.outcome,
+        input.summary?.slice(0, 500) ?? null,
         Math.round(input.durationMs),
         input.detail ? JSON.stringify(input.detail).slice(0, 20000) : null,
         nowIso()
       );
   }
 
-  listMcpCalls(workspaceId: string, limit = 50): McpCallRecord[] {
-    const rows = this.db.prepare('SELECT * FROM mcp_calls WHERE workspace_id = ? ORDER BY created_at DESC LIMIT ?').all(workspaceId, Math.min(Math.max(limit, 1), 500)) as Row[];
+  /** The newest MCP calls of a workspace; `toolCallsOnly` leaves out handshakes and listings. */
+  listMcpCalls(workspaceId: string, limit = 50, options: { toolCallsOnly?: boolean } = {}): McpCallRecord[] {
+    const rows = this.db
+      .prepare(
+        `SELECT c.*, u.name AS user_name FROM mcp_calls c LEFT JOIN users u ON u.id = c.user_id
+         WHERE c.workspace_id = ?${options.toolCallsOnly ? ' AND c.tool IS NOT NULL' : ''} ORDER BY c.created_at DESC LIMIT ?`
+      )
+      .all(workspaceId, Math.min(Math.max(limit, 1), 500)) as Row[];
     return rows.map((r) => ({
       id: String(r.id),
       workspaceId: String(r.workspace_id),
       tokenId: str(r.token_id),
+      userId: str(r.user_id),
+      userName: str(r.user_name),
+      client: str(r.client),
       method: String(r.method),
       tool: str(r.tool),
       repo: str(r.repo),
       outcome: r.outcome as McpCallOutcome,
+      summary: str(r.summary),
       durationMs: Number(r.duration_ms),
       detail: r.detail_json ? (JSON.parse(String(r.detail_json)) as Record<string, unknown>) : null,
       createdAt: String(r.created_at),
@@ -1693,13 +1823,33 @@ export class ProductStore {
   }
 
   /** The latest completed scan of a repository's default branch (not a pull request), with its facts. */
-  latestBranchScan(repoId: string): { id: string; commitSha: string; facts: { sqlTables: unknown[]; astFindings: unknown[] } } | null {
+  latestBranchScan(repoId: string): (BranchScanRecord & { facts: { sqlTables: unknown[]; astFindings: unknown[] } }) | null {
     const r = this.db
-      .prepare("SELECT id, commit_sha, facts_json FROM scans WHERE repo_id = ? AND status = 'completed' AND pr_number IS NULL AND facts_json IS NOT NULL ORDER BY finished_at DESC LIMIT 1")
+      .prepare(
+        "SELECT id, repo_id, commit_sha, finished_at, conclusion, facts_json FROM scans WHERE repo_id = ? AND status = 'completed' AND pr_number IS NULL AND facts_json IS NOT NULL ORDER BY finished_at DESC LIMIT 1"
+      )
       .get(repoId) as Row | undefined;
     if (!r) return null;
     const facts = JSON.parse(String(r.facts_json)) as { sqlTables?: unknown[]; astFindings?: unknown[] };
-    return { id: String(r.id), commitSha: String(r.commit_sha), facts: { sqlTables: facts.sqlTables ?? [], astFindings: facts.astFindings ?? [] } };
+    return { ...this.branchScanFrom(r), facts: { sqlTables: facts.sqlTables ?? [], astFindings: facts.astFindings ?? [] } };
+  }
+
+  /**
+   * The latest completed scan of a repository's default branch that was a real check (not the
+   * baseline of a pull request's base commit), whether or not it kept facts.
+   */
+  latestCheckedBranchScan(repoId: string): (BranchScanRecord & { facts: { sqlTables: unknown[]; astFindings: unknown[] } | null }) | null {
+    const r = this.db
+      .prepare(
+        "SELECT id, repo_id, commit_sha, finished_at, conclusion, facts_json FROM scans WHERE repo_id = ? AND pr_number IS NULL AND trigger <> 'baseline' AND status = 'completed' ORDER BY finished_at DESC LIMIT 1"
+      )
+      .get(repoId) as Row | undefined;
+    if (!r) return null;
+    return { ...this.branchScanFrom(r), facts: r.facts_json ? (JSON.parse(String(r.facts_json)) as { sqlTables: unknown[]; astFindings: unknown[] }) : null };
+  }
+
+  private branchScanFrom(r: Row): BranchScanRecord {
+    return { id: String(r.id), repoId: String(r.repo_id), commitSha: String(r.commit_sha), finishedAt: str(r.finished_at), conclusion: str(r.conclusion) };
   }
 
   /**

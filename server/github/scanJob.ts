@@ -110,7 +110,7 @@ export function createScanJobHandler(deps: ScanJobDeps): JobHandler {
       lexcompilerVersion: version,
       jobId: ctx.jobId,
     });
-    const detailsUrl = `${deps.publicUrl}/scans/${scan.id}`;
+    const detailsUrl = `${deps.publicUrl}/app/checks/${scan.id}`;
     let checkRunId: number | null = null;
     let stored = false;
     try {
@@ -156,7 +156,19 @@ export function createScanJobHandler(deps: ScanJobDeps): JobHandler {
       const conclusion = checkConclusion(p.kind, summary);
       const done = deps.store.completeScan(scan.id, { conclusion, filesScanned: head.filesScanned, summary, facts: head.facts, findings });
       stored = true;
-      const evidence = await deps.evidence?.scanCompleted(repo.workspaceId, { scan: done, rules, findings, undecidedRuleKeys: head.undecidedRuleKeys, checkRunUrl: run.html_url ?? null });
+      // The scan is already stored and the check is final; a failure to sign must not fail the run.
+      let evidence: { seq: number; headerSha256: string } | null = null;
+      try {
+        evidence = (await deps.evidence?.scanCompleted(repo.workspaceId, { scan: done, rules, findings, undecidedRuleKeys: head.undecidedRuleKeys, checkRunUrl: run.html_url ?? null })) ?? null;
+      } catch (err) {
+        console.error(`[evidence] scan ${scan.id}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      // Approved exceptions behind waived findings: who approved, until when, and why.
+      const waivers: Record<string, { expiresAt: string | null; reason: string; decidedBy: string | null }> = {};
+      for (const f of findings) {
+        const e = f.exceptionId && !waivers[f.exceptionId] ? deps.store.getException(repo.workspaceId, f.exceptionId) : undefined;
+        if (e) waivers[e.id] = { expiresAt: e.expiresAt, reason: e.decisionNote || e.reason, decidedBy: e.decidedByName };
+      }
 
       const output = renderCheckOutput({
         kind: p.kind,
@@ -169,7 +181,8 @@ export function createScanJobHandler(deps: ScanJobDeps): JobHandler {
         truncated: head.truncated,
         lexcompilerVersion: version,
         waiverLine: waiverLine(findings, new Map(exceptions.map((e) => [e.id, e.expiresAt ?? null]))),
-        evidence: evidence ?? null,
+        waivers,
+        evidence,
         upcoming: upcoming.rules.map((r) => ({ ruleKey: r.ruleKey, version: r.version, effectiveFrom: r.effectiveFrom ?? '', findings: upcoming.findings.filter((f) => f.ruleKey === r.ruleKey) })),
       });
       const [first = [], ...rest] = chunk(output.annotations, 50);

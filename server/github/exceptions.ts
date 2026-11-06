@@ -1,4 +1,5 @@
 import type { JobQueue } from '../jobs/queue.js';
+import { GovernanceStore } from '../product/governance.js';
 import type { ExceptionRecord, ProductStore } from '../product/store.js';
 import type { GitHubApp } from './client.js';
 import type { ScanJobPayload } from './scanJob.js';
@@ -13,6 +14,7 @@ export const REQUEST_EXCEPTION = 'request_exception';
 /** The button GitHub shows on a failing pull request check (label ≤ 20, description ≤ 40 characters). */
 export const REQUEST_EXCEPTION_ACTION = { label: 'Request exception', description: 'Ask Legal to waive the new findings', identifier: REQUEST_EXCEPTION } as const;
 
+/** What a comment job carries. The older `repoFullName`/`prNumber` names (jobs queued before the merge) are still read. */
 export interface CommentJobPayload {
   installationId: number;
   fullName: string;
@@ -20,77 +22,59 @@ export interface CommentJobPayload {
   body: string;
 }
 
-/** Posts a comment on a pull request with the installation token. */
+/** Posts a comment on a pull request with the installation token. Registered as 'github_comment' and 'pr_comment'. */
 export function createCommentJobHandler(deps: { getApp: () => GitHubApp | null }) {
   return async (raw: Record<string, unknown>): Promise<void> => {
-    const p = raw as unknown as CommentJobPayload;
+    const p = raw as Partial<CommentJobPayload> & { repoFullName?: string; prNumber?: number };
+    const fullName = p.fullName ?? p.repoFullName;
+    const issueNumber = p.issueNumber ?? p.prNumber;
+    if (typeof p.installationId !== 'number' || !fullName || !issueNumber) throw new Error('the comment job has no installation, repository or pull request');
     const app = deps.getApp();
     if (!app) throw new Error('The GitHub App is not configured on this server.');
-    await app.request(p.installationId, 'POST', `/repos/${p.fullName}/issues/${p.issueNumber}/comments`, { body: p.body });
+    await app.request(p.installationId, 'POST', `/repos/${fullName}/issues/${issueNumber}/comments`, { body: String(p.body ?? '').slice(0, 60000) });
   };
 }
 
 /**
- * A click on "Request exception": one request per new finding of the run's scan, attributed to
- * the GitHub user who clicked. Returns what to tell the webhook caller.
+ * The open pull requests an exception touches, with the commits to check: every pull request whose
+ * newest scan has the finding (at that scan's commits), plus the one the exception was requested on.
  */
-export function requestExceptionsFromCheckRun(
-  deps: { store: ProductStore; queue: JobQueue },
-  input: { checkRunId: number; installationId: number; login: string; deliveryId: string }
-): string {
-  const scan = deps.store.getScanByCheckRun(input.checkRunId);
-  if (!scan) return 'ignored: no LexCompiler scan for this check run';
-  const repo = deps.store.getRepo(scan.repoId);
-  if (!repo?.workspaceId) return 'ignored: the repository is not linked to a workspace';
-  if (scan.prNumber === null) return 'ignored: exceptions are requested on pull requests';
-  const findings = deps.store.listFindings(scan.id).filter((f) => f.state === 'new');
-  if (findings.length === 0) return 'ignored: the check has no new findings';
-  let created = 0;
-  for (const f of findings) {
-    const r = deps.store.requestException({
-      workspaceId: repo.workspaceId,
-      ruleId: f.ruleId,
-      repoId: repo.id,
-      fingerprint: f.fingerprint,
-      reason: `Requested from GitHub by @${input.login} on pull request #${scan.prNumber}`,
-      requestedBy: `github:${input.login}`,
-      requestedFrom: 'github',
-      scan: { id: scan.id, prNumber: scan.prNumber, headSha: scan.commitSha, baseSha: scan.baseSha },
-      finding: { filePath: f.filePath, startLine: f.startLine, message: f.message },
-    });
-    if (r.created) created++;
+export function exceptionPullRequests(deps: { store: ProductStore; gov?: GovernanceStore }, e: ExceptionRecord): Map<number, { headSha: string; baseSha: string | null }> {
+  const targets = new Map<number, { headSha: string; baseSha: string | null }>();
+  if (!e.repoId) return targets;
+  const repo = deps.store.getRepo(e.repoId);
+  if (!repo || repo.source !== 'github' || repo.githubRepoId === null || repo.installationId === null) return targets;
+  if (e.fingerprint) {
+    const gov = deps.gov ?? new GovernanceStore(deps.store.db, deps.store);
+    const latest = new Map(gov.latestPullRequestScans(repo.id).map((s) => [s.prNumber, s]));
+    for (const pr of gov.pullRequestsWithFinding(repo.id, e.fingerprint)) {
+      const s = latest.get(pr);
+      if (s) targets.set(pr, { headSha: s.commitSha, baseSha: s.baseSha });
+    }
   }
-  if (created > 0) {
-    const what = findings.map((f) => `- **${f.ruleKey}** \`${f.filePath}:${f.startLine}\``).join('\n');
-    deps.queue.enqueue(
-      'github_comment',
-      {
-        installationId: input.installationId,
-        fullName: repo.fullName,
-        issueNumber: scan.prNumber,
-        body: `Exception requested by @${input.login} — waiting for Legal.\n\n${what}\n\nThe check runs again when Legal decides.`,
-      } satisfies CommentJobPayload as unknown as Record<string, unknown>,
-      { dedupeKey: `exception-comment:${input.deliveryId}` }
-    );
+  if (e.prNumber !== null && e.headSha && !targets.has(e.prNumber)) targets.set(e.prNumber, { headSha: e.headSha, baseSha: e.baseSha });
+  return targets;
+}
+
+/**
+ * Runs the check again after Legal decided, revoked or expired an exception: one job per decision
+ * and pull request (see exceptionPullRequests). Returns the queued job ids.
+ */
+export function recheckForException(deps: { store: ProductStore; queue: JobQueue; gov?: GovernanceStore }, e: ExceptionRecord): string[] {
+  const repo = e.repoId ? deps.store.getRepo(e.repoId) : undefined;
+  if (!repo || repo.githubRepoId === null || repo.installationId === null) return [];
+  const jobs: string[] = [];
+  for (const [prNumber, t] of exceptionPullRequests(deps, e)) {
+    const payload: ScanJobPayload = { githubRepoId: repo.githubRepoId, installationId: repo.installationId, kind: 'pull_request', trigger: 'rerun', headSha: t.headSha, baseSha: t.baseSha, prNumber };
+    const id = deps.queue.enqueue('scan', payload as unknown as Record<string, unknown>, { dedupeKey: `exception:${e.id}:${e.status}:pr${prNumber}` });
+    if (id) jobs.push(id);
   }
-  return created > 0 ? `exception requested for ${created} finding${created === 1 ? '' : 's'}` : 'exception already requested';
+  return jobs;
 }
 
 /** Runs a pull request's check again after Legal decided an exception requested on it. */
-export function rerunCheckForException(deps: { store: ProductStore; queue: JobQueue }, exception: ExceptionRecord): string | null {
-  if (exception.prNumber === null || !exception.headSha || !exception.repoId) return null;
-  const repo = deps.store.getRepo(exception.repoId);
-  if (!repo || repo.source !== 'github' || repo.githubRepoId === null || repo.installationId === null) return null;
-  const payload: ScanJobPayload = {
-    githubRepoId: repo.githubRepoId,
-    installationId: repo.installationId,
-    kind: 'pull_request',
-    trigger: 'rerun',
-    headSha: exception.headSha,
-    baseSha: exception.baseSha,
-    prNumber: exception.prNumber,
-  };
-  return deps.queue.enqueue('scan', payload as unknown as Record<string, unknown>, { dedupeKey: `exception:${exception.id}:${exception.status}` });
+export function rerunCheckForException(deps: { store: ProductStore; queue: JobQueue; gov?: GovernanceStore }, exception: ExceptionRecord): string | null {
+  return recheckForException(deps, exception)[0] ?? null;
 }
 
 /** "1 finding waived until 30 Nov 2026" for the check summary; null when nothing is waived. */

@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import express from 'express';
 import type { Request, Response } from 'express';
-import { OidcProvider, type Principal } from '../auth/oidc.js';
+import { OidcProvider, type Principal, type SessionStore } from '../auth/oidc.js';
 import type { JobQueue } from '../jobs/queue.js';
 import { can, type ProductStore, type User } from '../product/store.js';
 import { isLoopbackHostname } from '../security.js';
@@ -15,14 +15,24 @@ export interface BrowserAuth {
   loginUrl(returnTo: string): string | null;
 }
 
-/** OIDC session cookie when sign-in is configured; otherwise only requests from this machine count, as the local administrator. */
-export function createBrowserAuth(oidc: OidcProvider | null): BrowserAuth {
+/**
+ * The session cookie (OIDC or password sign-in) when sign-in is on; otherwise only requests from
+ * this machine count, as the local administrator.
+ */
+export function createBrowserAuth(oidc: OidcProvider | null, options: { sessions?: SessionStore; signInRequired?: boolean } = {}): BrowserAuth {
+  const signIn = Boolean(oidc) || Boolean(options.signInRequired);
   return {
     async principal(req) {
-      if (oidc) return oidc.principalFromSession(OidcProvider.sessionIdFromCookies(req.headers.cookie));
+      const sid = OidcProvider.sessionIdFromCookies(req.headers.cookie);
+      if (oidc) return oidc.principalFromSession(sid);
+      if (sid && options.sessions) {
+        const p = options.sessions.get(sid);
+        if (p) return p;
+      }
+      if (signIn) return null;
       return isLoopbackRequest(req) ? { sub: 'local', globalRole: 'admin', via: 'loopback' } : null;
     },
-    loginUrl: (returnTo) => (oidc ? `/api/auth/login?returnTo=${encodeURIComponent(returnTo)}` : null),
+    loginUrl: (returnTo) => (oidc ? `/api/auth/login?returnTo=${encodeURIComponent(returnTo)}` : signIn ? `/login?returnTo=${encodeURIComponent(returnTo)}` : null),
   };
 }
 
@@ -314,6 +324,7 @@ export function createGitHubRoutes(deps: GitHubRouteDeps) {
 ${s ? `<p><span class="new">${s.newCount} new</span> · <span class="existing">${s.existingCount} existing</span> · <span class="waived">${s.waivedCount} waived</span>${s.undecidedRuleKeys.length ? ` · undecided: ${esc(s.undecidedRuleKeys.join(', '))}` : ''}</p>` : ''}
 <table><tr><th>State</th><th>Rule</th><th>Location</th><th>Finding</th></tr>
 ${findings.map((f) => `<tr><td class="${esc(f.state)}">${esc(f.state)}</td><td>${esc(f.ruleKey)}</td><td><code>${esc(f.filePath)}:${f.startLine}</code></td><td>${esc(f.message)}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">No findings.</td></tr>'}</table>
+<p><a href="/app/checks/${encodeURIComponent(scan.id)}">Open in the web app</a></p>
 <p class="muted">Rules ${esc(scan.ruleVersions.map((v) => `${v.ruleKey} v${v.version}`).join(', '))} · ${scan.filesScanned ?? 0} files · LexCompiler ${esc(scan.lexcompilerVersion)} · commit <code>${esc(scan.commitSha)}</code></p>`
     );
   });

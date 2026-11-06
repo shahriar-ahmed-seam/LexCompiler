@@ -54,9 +54,13 @@ function sourceFiles(dir: string): string[] {
 }
 
 const palette = loadPalette();
-const files = sourceFiles(path.join(process.cwd(), 'src')).map((f) => ({ file: path.relative(process.cwd(), f), text: fs.readFileSync(f, 'utf8') }));
+const files = sourceFiles(path.join(process.cwd(), 'src')).map((f) => ({ file: path.relative(process.cwd(), f).split(path.sep).join('/'), text: fs.readFileSync(f, 'utf8') }));
+// The engine console (/lab) is dark; the product app (src/product) is light, apart from src/product/dark.
+const isLight = (file: string) => file.startsWith('src/product/') && !file.startsWith('src/product/dark/');
+const darkFiles = files.filter((f) => !isLight(f.file));
+const lightFiles = files.filter((f) => isLight(f.file));
 // Dark panel backgrounds the UI paints (arbitrary hex classes plus the body colour).
-const panels = [...new Set(files.flatMap((f) => [...f.text.matchAll(/bg-\[(#[0-9A-Fa-f]{6})\]/g)].map((m) => m[1].toLowerCase())))].concat('#050609');
+const panels = [...new Set(darkFiles.flatMap((f) => [...f.text.matchAll(/bg-\[(#[0-9A-Fa-f]{6})\]/g)].map((m) => m[1].toLowerCase())))].concat('#050609');
 const lightestPanel = panels.map((hex) => [hex, hexToLinear(hex)] as const).sort((a, b) => luminance(b[1]) - luminance(a[1]))[0];
 
 describe('colour contrast (WCAG AA)', () => {
@@ -68,7 +72,7 @@ describe('colour contrast (WCAG AA)', () => {
 
   it('every text colour used reaches 4.5:1 on the lightest dark panel', () => {
     const failures: string[] = [];
-    for (const f of files) {
+    for (const f of darkFiles) {
       for (const m of f.text.matchAll(/(?<![\w:-])(hover:)?text-([a-z]+-\d{2,3})(?![\w/-])/g)) {
         const colour = palette.get(m[2]);
         if (!colour) continue;
@@ -79,6 +83,26 @@ describe('colour contrast (WCAG AA)', () => {
     expect(failures).toEqual([]);
   });
 
+  it('every text colour in the light product app reaches 4.5:1 on its page background', () => {
+    // #fafafa (zinc-50) is the page and table-header colour; cards are white, which contrasts more.
+    const page = hexToLinear('#fafafa');
+    const failures: string[] = [];
+    for (const f of lightFiles) {
+      // Icons are graphics, not text: lucide-react components are skipped (WCAG 1.4.3 covers text).
+      const icons = [...f.text.matchAll(/import\s*\{([^}]+)\}\s*from\s*'lucide-react'/g)].flatMap((m) => m[1].split(',').map((n) => n.trim()).filter(Boolean));
+      const iconRanges = icons.length
+        ? [...f.text.matchAll(new RegExp(`<(?:${icons.join('|')})\\b[^>]*?/>`, 'g'))].map((m) => [m.index!, m.index! + m[0].length] as const)
+        : [];
+      for (const m of f.text.matchAll(/(?<![\w:-])(hover:)?text-([a-z]+-\d{2,3})(?![\w/-])/g)) {
+        if (iconRanges.some(([a, b]) => m.index! >= a && m.index! < b)) continue;
+        const colour = palette.get(m[2]);
+        if (!colour) continue;
+        const ratio = contrast(colour, page);
+        if (ratio < AA) failures.push(`${f.file}: ${m[0]} = ${ratio.toFixed(2)}:1 on #fafafa`);
+      }
+    }
+    expect(failures).toEqual([]);
+  });
   it('white or black text on a solid colour reaches 4.5:1, hover state included', () => {
     const failures: string[] = [];
     for (const f of files) {

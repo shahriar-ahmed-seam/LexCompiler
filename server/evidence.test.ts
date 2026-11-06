@@ -204,7 +204,7 @@ describe('share links and the evidence pack', () => {
     const all = log.records(ws);
     expect(view.body.evidence.headers.map((h: { seq: number }) => h.seq)).toEqual(all.map((r) => r.seq));
     const types = (seqs: number[]) => seqs.map((s) => JSON.parse(all.find((r) => r.seq === s)!.header).type);
-    expect(types(view.body.evidence.bodySeqs)).toEqual(['rule.approved', 'scan.completed', 'exception.approved', 'share.created']);
+    expect(types(view.body.evidence.bodySeqs)).toEqual(['rule.approved', 'scan.completed', 'exception.requested', 'exception.approved']);
 
     // The pack verifies with keys from the .well-known URL (standing in for FinHealth's website).
     const keys = await call(`/.well-known/lexcompiler/${ws}/keys.json`, null);

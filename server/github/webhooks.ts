@@ -2,7 +2,8 @@ import type { Request, Response } from 'express';
 import type { JobQueue } from '../jobs/queue.js';
 import type { ProductStore } from '../product/store.js';
 import { verifyWebhookSignature, type GitHubApp } from './client.js';
-import { REQUEST_EXCEPTION, requestExceptionsFromCheckRun } from './exceptions.js';
+import { requestFromCheckRun } from '../product/flows.js';
+import { REQUEST_EXCEPTION } from './exceptions.js';
 import type { ScanJobPayload } from './scanJob.js';
 
 type Obj = Record<string, unknown>;
@@ -17,6 +18,8 @@ export interface WebhookDeps {
   queue: JobQueue;
   /** Deliveries arrive through a relay that re-stringifies JSON (smee.io); see verifyWebhookSignature. */
   relayReencoded?: boolean;
+  /** "Request exception" was clicked on a check run. Returns what happened. */
+  onRequestException?: (input: { checkRunId: number; login: string; installationId: number; deliveryId: string }) => string | Promise<string>;
 }
 
 /**
@@ -24,7 +27,7 @@ export interface WebhookDeps {
  * records and queues work, because GitHub fails any delivery not answered within 10 seconds.
  */
 export function createWebhookHandler(deps: WebhookDeps) {
-  return (req: Request, res: Response): void => {
+  return async (req: Request, res: Response): Promise<void> => {
     const app = deps.getApp();
     if (!app) {
       res.status(503).json({ error: 'The GitHub App is not configured on this server.' });
@@ -55,14 +58,19 @@ export function createWebhookHandler(deps: WebhookDeps) {
       return;
     }
     try {
-      res.status(202).json({ accepted: true, result: routeEvent(event, payload, deps, app, deliveryId) });
+      res.status(202).json({ accepted: true, result: await routeEvent(event, payload, deps, app, deliveryId) });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
   };
 }
 
-function routeEvent(event: string, payload: Obj, deps: WebhookDeps, app: GitHubApp, deliveryId: string): string {
+/** The server's own wiring (people, evidence) when it gave one; otherwise the store alone. */
+function requestException(deps: WebhookDeps, input: { checkRunId: number; login: string; installationId: number; deliveryId: string }): string | Promise<string> {
+  return deps.onRequestException ? deps.onRequestException(input) : requestFromCheckRun({ store: deps.store, queue: deps.queue, publicUrl: '' }, input);
+}
+
+async function routeEvent(event: string, payload: Obj, deps: WebhookDeps, app: GitHubApp, deliveryId: string): Promise<string> {
   const { store } = deps;
   const action = text(payload.action);
   const installation = obj(payload.installation);
@@ -141,7 +149,7 @@ function routeEvent(event: string, payload: Obj, deps: WebhookDeps, app: GitHubA
       const checkRunId = num(subject.id);
       const login = text(obj(payload.sender).login);
       if (checkRunId === null || !login) return 'ignored: requested_action without a check run or sender';
-      return requestExceptionsFromCheckRun(deps, { checkRunId, installationId, login, deliveryId });
+      return await requestException(deps, { checkRunId, installationId, login, deliveryId });
     }
     if (action !== 'rerequested') return `ignored: ${event}.${action}`;
     const headSha = text(subject.head_sha);
