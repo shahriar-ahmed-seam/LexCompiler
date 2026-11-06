@@ -25,7 +25,7 @@ export function currentWindowsAccount(): string {
  * Windows ignores POSIX mode bits, so `mode: 0o600` alone leaves the key readable by
  * every local user through inherited ACLs. Drop inheritance and grant only the owner.
  */
-function restrictToOwner(keyPath: string): void {
+export function restrictToOwner(keyPath: string): void {
   if (process.platform !== 'win32') return;
   execFileSync('icacls', [keyPath, '/inheritance:r', '/grant:r', `${currentWindowsAccount()}:F`], {
     stdio: 'ignore',

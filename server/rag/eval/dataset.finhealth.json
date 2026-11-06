@@ -1,0 +1,15 @@
+{
+  "description": "Questions over shahriar-ahmed-seam/finhealth-core-platform on feat/loan-applications (run with LEXCOMPILER_TARGET_REPO set to the clone). Relevance: 2 = primary evidence, 1 = supporting.",
+  "clauses": "en",
+  "repository": "https://github.com/shahriar-ahmed-seam/finhealth-core-platform (feat/loan-applications)",
+  "questions": [
+    { "id": "fh01", "query": "Which endpoint accepts new loan applications?", "relevant": { "chunk-ast-ast-py-endpoint-api/loan_applications.py-create_application": 2, "chunk-ast-ast-py-entry-api/loan_applications.py-create_application": 2 } },
+    { "id": "fh02", "query": "What personal data does the loan applicant model collect?", "relevant": { "chunk-ast-ast-py-model-api/loan_applications.py-LoanApplicant": 2, "chunk-ast-ast-py-entry-api/loan_applications.py-create_application": 1 } },
+    { "id": "fh03", "query": "Does the loan application endpoint log the phone number or national id?", "relevant": { "chunk-ast-ast-py-endpoint-api/loan_applications.py-create_application": 2, "chunk-law-CLAUSE-HIPAA-312B": 1 } },
+    { "id": "fh04", "query": "Is the loan applicant's national_id encrypted with a tenant KMS key?", "relevant": { "chunk-ast-ast-py-endpoint-api/loan_applications.py-create_application": 2, "chunk-law-CLAUSE-DPA-4.2": 1, "chunk-proof-CLAUSE-DPA-4.2": 1 } },
+    { "id": "fh05", "query": "Which endpoints log plaintext SSN or email?", "relevant": { "chunk-ast-ast-py-logger-api/fastapi_intake.py-33-4": 2, "chunk-law-CLAUSE-HIPAA-312B": 1, "chunk-proof-CLAUSE-HIPAA-312B": 1 } },
+    { "id": "fh06", "query": "How long does the Redis cache keep patient sessions?", "relevant": { "chunk-ast-ast-py-retention-workers/redis_cache_worker.py-PII_CACHE_TTL_HOURS": 2, "chunk-law-CLAUSE-DPA-4.2": 1 } },
+    { "id": "fh07", "query": "Does the credit triage AI auto-approve below 85% confidence?", "relevant": { "chunk-ast-ast-ts-ai-services/ai_credit_triage.ts-MIN_CONFIDENCE_FOR_AUTO_APPROVAL": 2, "chunk-law-CLAUSE-EU-AI-14": 1, "chunk-proof-CLAUSE-EU-AI-14": 1 } },
+    { "id": "fh08", "query": "Where is patient telemetry replicated outside the EU?", "relevant": { "chunk-ast-ast-ts-egress-services/cross_border_sync.ts-REPLICA_TARGET_REGION": 2, "chunk-law-CLAUSE-GDPR-44": 1, "chunk-proof-CLAUSE-GDPR-44": 1 } }
+  ]
+}

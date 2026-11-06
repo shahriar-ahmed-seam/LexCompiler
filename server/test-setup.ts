@@ -7,3 +7,5 @@ enterScratchFixtureCopy('test');
 // and the Ollama endpoint refuses connections, unless a test points these at a fake server.
 process.env.LEXCOMPILER_EMBEDDING_MODEL = 'none';
 process.env.OLLAMA_HOST = 'http://127.0.0.1:9';
+// Nor on the network: the regulatory feed serves its offline items (feed tests pass their own fetch).
+process.env.LEXCOMPILER_REGULATORY_FEED = 'offline';

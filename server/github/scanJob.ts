@@ -1,12 +1,17 @@
 import type { JobHandler } from '../jobs/queue.js';
-import { classifyFindings, globMatch, scanFiles, type RawFinding } from '../product/scanner.js';
-import type { GovernanceStore } from '../product/governance.js';
-import { rulesetSha256, type ProductStore, type Repo, type RuleInEffect, type ScanRecord, type ScanTrigger } from '../product/store.js';
-import type { ClassifiedFinding } from '../product/scanner.js';
+import { storeComingUp, upcomingFindings } from '../product/repoScan.js';
+import { classifyFindings, scanFilesScoped, type RawFinding } from '../product/scanner.js';
+import type { TargetRepoFile } from '../../shared/types.js';
+import { rulesetSha256, type ProductStore, type Repo, type RuleInEffect, type ScanTrigger } from '../product/store.js';
 import { summarizeFindings } from '../product/summary.js';
 import { lexcompilerVersion } from '../util/versions.js';
+import type { EvidenceRecorder } from '../evidence/records.js';
 import { CHECK_NAME, checkConclusion, chunk, renderCheckOutput, type CheckKind } from './checkRun.js';
 import { GitHubApiError, type GitHubApp } from './client.js';
+import { REQUEST_EXCEPTION_ACTION, waiverLine } from './exceptions.js';
+import { postSuggestions } from './fixes.js';
+import { explainFindings, renderExplanations } from './explanations.js';
+import type { AiGateway } from '../ai/gateway.js';
 import { readTarballSources } from './tarball.js';
 
 export interface ScanJobPayload {
@@ -26,13 +31,14 @@ export interface ScanJobDeps {
   store: ProductStore;
   getApp: () => GitHubApp | null;
   publicUrl: string;
-  /** Exceptions, for the waived findings in the check summary. */
-  gov?: GovernanceStore;
-  /** Writes the scan's signed evidence record. */
-  recordEvidence?: (scan: ScanRecord, findings: ClassifiedFinding[], checkRunUrl: string) => { seq: number; headerSha256: string } | null;
+  /** Signs a record of each completed scan; its header hash goes into the check run. */
+  evidence?: EvidenceRecorder;
+  /** Model calls for AI explanations, after the check is final, when the workspace has AI on (5.5). */
+  ai?: AiGateway;
 }
 
 interface CommitScan {
+  files: TargetRepoFile[];
   findings: RawFinding[];
   undecidedRuleKeys: string[];
   filesScanned: number;
@@ -116,7 +122,7 @@ export function createScanJobHandler(deps: ScanJobDeps): JobHandler {
       // A retry updates the run its first attempt created (still in progress), so a commit never
       // collects one run per attempt or keeps a run that stays "in progress" forever.
       const reuse = ctx.attempt > 1 ? deps.store.previousCheckRunForJob(ctx.jobId) : null;
-      let run: { id: number } | null = null;
+      let run: { id: number; html_url?: string } | null = null;
       if (reuse !== null) {
         try {
           await app.request(installationId, 'PATCH', `${route}/check-runs/${reuse}`, { status: 'in_progress', ...progress });
@@ -125,7 +131,7 @@ export function createScanJobHandler(deps: ScanJobDeps): JobHandler {
           if (!(err instanceof GitHubApiError) || ![404, 422].includes(err.status)) throw err;
         }
       }
-      run ??= await app.request<{ id: number }>(installationId, 'POST', `${route}/check-runs`, {
+      run ??= await app.request<{ id: number; html_url?: string }>(installationId, 'POST', `${route}/check-runs`, {
         name: CHECK_NAME,
         head_sha: headSha,
         status: 'in_progress',
@@ -141,20 +147,26 @@ export function createScanJobHandler(deps: ScanJobDeps): JobHandler {
         const baseline = await mergeBase(app, installationId, route, p.baseSha, headSha);
         base = await baselineFindings(deps.store, app, installationId, repo, baseline, rules, globs, version);
       }
-      const findings = classifyFindings(head.findings, base, deps.store.activeExceptions(repo.workspaceId, repo.id));
+      // Approved versions that take effect later: warnings now, and "Coming up" for the default branch.
+      const upcoming = await upcomingFindings(deps.store, repo, head.files);
+      if (p.kind === 'push') await storeComingUp(deps.store, repo, headSha, head.files);
+      const exceptions = deps.store.activeExceptions(repo.workspaceId, repo.id);
+      const findings = classifyFindings(head.findings, base, exceptions);
       const summary = summarizeFindings(findings, head.undecidedRuleKeys);
       const conclusion = checkConclusion(p.kind, summary);
-      const completed = deps.store.completeScan(scan.id, { conclusion, filesScanned: head.filesScanned, summary, facts: head.facts, findings });
+      const done = deps.store.completeScan(scan.id, { conclusion, filesScanned: head.filesScanned, summary, facts: head.facts, findings });
       stored = true;
+      // The scan is already stored and the check is final; a failure to sign must not fail the run.
       let evidence: { seq: number; headerSha256: string } | null = null;
       try {
-        evidence = deps.recordEvidence?.(completed, findings, `${app.urls.webUrl}/${repo.fullName}/runs/${run.id}`) ?? null;
+        evidence = (await deps.evidence?.scanCompleted(repo.workspaceId, { scan: done, rules, findings, undecidedRuleKeys: head.undecidedRuleKeys, checkRunUrl: run.html_url ?? null })) ?? null;
       } catch (err) {
         console.error(`[evidence] scan ${scan.id}: ${err instanceof Error ? err.message : String(err)}`);
       }
+      // Approved exceptions behind waived findings: who approved, until when, and why.
       const waivers: Record<string, { expiresAt: string | null; reason: string; decidedBy: string | null }> = {};
       for (const f of findings) {
-        const e = f.exceptionId && deps.gov ? deps.gov.getException(repo.workspaceId, f.exceptionId) : undefined;
+        const e = f.exceptionId && !waivers[f.exceptionId] ? deps.store.getException(repo.workspaceId, f.exceptionId) : undefined;
         if (e) waivers[e.id] = { expiresAt: e.expiresAt, reason: e.decisionNote || e.reason, decidedBy: e.decidedByName };
       }
 
@@ -168,8 +180,10 @@ export function createScanJobHandler(deps: ScanJobDeps): JobHandler {
         filesScanned: head.filesScanned,
         truncated: head.truncated,
         lexcompilerVersion: version,
+        waiverLine: waiverLine(findings, new Map(exceptions.map((e) => [e.id, e.expiresAt ?? null]))),
         waivers,
         evidence,
+        upcoming: upcoming.rules.map((r) => ({ ruleKey: r.ruleKey, version: r.version, effectiveFrom: r.effectiveFrom ?? '', findings: upcoming.findings.filter((f) => f.ruleKey === r.ruleKey) })),
       });
       const [first = [], ...rest] = chunk(output.annotations, 50);
       await app.request(installationId, 'PATCH', `${route}/check-runs/${run.id}`, {
@@ -178,14 +192,35 @@ export function createScanJobHandler(deps: ScanJobDeps): JobHandler {
         completed_at: nowIso(),
         details_url: detailsUrl,
         output: { title: output.title, summary: output.summary, annotations: first },
-        // GitHub shows these as buttons on the check run; a click arrives as check_run.requested_action.
-        actions:
-          p.kind === 'pull_request' && summary.newCount > 0
-            ? [{ label: 'Request exception', description: 'Ask Legal to approve an exception', identifier: 'request_exception' }]
-            : [],
+        // A pull request that fails for new findings offers "Request exception" (check_run.requested_action).
+        ...(p.kind === 'pull_request' && summary.newCount > 0 ? { actions: [REQUEST_EXCEPTION_ACTION] } : {}),
       });
       for (const batch of rest) {
         await app.request(installationId, 'PATCH', `${route}/check-runs/${run.id}`, { output: { title: output.title, summary: output.summary, annotations: batch } });
+      }
+      // AI explanations (5.5): the result above is final; they only add details to the run.
+      let explanations = new Map<string, string>();
+      if (p.kind === 'pull_request' && deps.ai && summary.newCount > 0) {
+        try {
+          const ex = await explainFindings(deps.ai, { workspaceId: repo.workspaceId, findings, rules, files: head.files });
+          if (ex.length > 0) {
+            await app.request(installationId, 'PATCH', `${route}/check-runs/${run.id}`, { output: { title: output.title, summary: output.summary, text: renderExplanations(ex) } });
+            explanations = new Map(ex.map((e) => [e.fingerprint, `**AI explanation** (${e.model}): ${e.text}`]));
+          }
+        } catch (err) {
+          console.warn(`[github] AI explanations on ${repo.fullName} failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      // Suggested changes (Phase 4, item 2): after the check is final, and never failing it.
+      if (p.kind === 'pull_request' && p.prNumber) {
+        try {
+          await postSuggestions(
+            { store: deps.store, app },
+            { repo, prNumber: p.prNumber, headSha, files: head.files, findings, rules, globs, explanations, ai: deps.ai ? { gateway: deps.ai, workspaceId: repo.workspaceId } : undefined }
+          );
+        } catch (err) {
+          console.warn(`[github] suggestions on ${repo.fullName}#${p.prNumber} failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -224,10 +259,9 @@ async function scanCommit(
   globs: Map<string, string[]>
 ): Promise<CommitScan> {
   const sources = await readTarballSources(await app.downloadTarball(installationId, repo.fullName, sha));
-  const result = await scanFiles(sources.files, rules);
-  // A rule scoped to a counterparty only counts in that counterparty's paths.
-  const findings = result.findings.filter((f) => (globs.get(f.ruleKey) ?? ['**']).some((g) => globMatch(g, f.filePath)));
-  return { findings, undecidedRuleKeys: result.undecidedRuleKeys, filesScanned: result.filesScanned, truncated: sources.truncatedAtLimit, facts: result.facts };
+  // A rule scoped to a counterparty is proven only on that counterparty's paths.
+  const result = await scanFilesScoped(sources.files, rules, globs);
+  return { files: sources.files, findings: result.findings, undecidedRuleKeys: result.undecidedRuleKeys, filesScanned: result.filesScanned, truncated: sources.truncatedAtLimit, facts: result.facts };
 }
 
 /** The commit the pull request branched from, so fixes made on the base branch later don't count as new. */

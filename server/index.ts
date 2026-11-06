@@ -3,23 +3,22 @@ import { externalClient, probeExternalMcpServers } from './mcp/externalClients.j
 import { getAttestationSigner, revocations, revoke, trustedKeys } from './enterprise/attestationSigner.js';
 import { verifyTimestamp } from './enterprise/timestamp.js';
 import { OidcProvider, oidcConfigFromEnv } from './auth/oidc.js';
-import { getDb } from './db/index.js';
+import { dataDir, getDb } from './db/index.js';
 import { createAuthenticator, createProductRouter } from './product/router.js';
-import { databaseSessionStore, ProductStore } from './product/store.js';
+import { databaseSessionStore, ProductStore, StoreError, type Repo } from './product/store.js';
 import { GovernanceStore } from './product/governance.js';
-import { EvidenceLog } from './evidence/log.js';
-import { expireExceptions, recordScanEvidence, requestFromCheckRun, ruleDecided, type FlowDeps } from './product/flows.js';
+import type { FlowDeps } from './product/flows.js';
+import { expireExceptions, requestFromCheckRun } from './product/flows.js';
 import { mountWorkspaceRoutes } from './product/workspaceRoutes.js';
 import { createPublicRoutes } from './product/publicRoutes.js';
-import { createWorkspaceMcpHandler } from './mcp/workspaceMcp.js';
 import { createGovernanceJobHandlers } from './github/governanceJobs.js';
-import { getAiGateway } from './ai/gateway.js';
 import { lexcompilerVersion } from './util/versions.js';
 import { GitHubApp, githubUrls } from './github/client.js';
 import { loadGitHubAppCredentials } from './github/credentials.js';
 import { createBrowserAuth, createGitHubApiRouter, createGitHubRoutes } from './github/routes.js';
 import { createScanJobHandler } from './github/scanJob.js';
-import { createWebhookHandler } from './github/webhooks.js';
+import { createCommentJobHandler } from './github/exceptions.js';
+import { createWebhookHandler, enqueueScan } from './github/webhooks.js';
 import { JobQueue } from './jobs/queue.js';
 import path from 'node:path';
 import cors from 'cors';
@@ -31,6 +30,7 @@ import {
 import { analyzeFullRepositoryAsync } from './analyzer/astAnalyzer.js';
 import {
   ensureTargetRepoFilesExist,
+  readRepositoryFilesAt,
   readTargetRepoFiles,
   resetTargetRepoToBaseline,
   TARGET_REPO_IS_FIXTURE,
@@ -48,7 +48,19 @@ import {
   inferRuleCategoryFromProse,
 } from './compiler/legalCompiler.js';
 import { getMcpServersCatalog, handleMcpMessage, invokeMcpTool } from './mcp/mcpSuite.js';
+import { createWorkspaceMcpRouter } from './mcp/workspaceServer.js';
+import { createOAuthRouter } from './mcp/oauth.js';
+import { EvidenceLog, legacyAttestationKey } from './evidence/log.js';
+import { EvidenceRecorder } from './evidence/records.js';
+import { workspaceSigners } from './evidence/signer.js';
+import { AiGateway, getAiGateway } from './ai/gateway.js';
 import { createAgentRouter } from './agents/routes.js';
+import { CrewRunStore } from './agents/crew.js';
+import { runWorkspaceCrew } from './agents/workspaceCrew.js';
+import { createPublicEvidenceRouter } from './evidence/share.js';
+import { FixPrError, openFixPullRequest } from './github/fixes.js';
+import { refreshRegulatoryFeed, runDueJobs } from './product/feed.js';
+import { readTarballSources } from './github/tarball.js';
 import { loadActiveClauseState, saveActiveClauseState } from './state.js';
 import {
   compressLegalProseCaveman,
@@ -86,8 +98,11 @@ import {
 import {
   assertSafeBindConfig,
   createApiGuard,
+  httpsOnly,
   isOriginAllowed,
+  rateLimit,
   resolveServerSecurityConfig,
+  trustProxySetting,
 } from './security.js';
 import { resolvePythonAsync } from './util/python.js';
 import { buildComplianceReport } from './report.js';
@@ -112,8 +127,10 @@ const securityConfig = resolveServerSecurityConfig();
 assertSafeBindConfig(securityConfig);
 
 const app = express();
-// Behind a local reverse proxy or tunnel (cloudflared, Caddy), take the client address from X-Forwarded-For.
-app.set('trust proxy', 'loopback');
+// Behind a reverse proxy or tunnel (Phase 7): trust its X-Forwarded-* headers so req.ip, req.secure
+// and rate limits see the real client. Defaults to loopback (a proxy or tunnel on this machine); set LEXCOMPILER_TRUST_PROXY to a hop count or list for another setup.
+const trustProxy = trustProxySetting(process.env.LEXCOMPILER_TRUST_PROXY || 'loopback');
+if (trustProxy !== undefined) app.set('trust proxy', trustProxy);
 app.use(
   cors({
     origin: (origin, callback) => callback(null, isOriginAllowed(securityConfig, origin)),
@@ -124,6 +141,26 @@ const productStore = new ProductStore(getDb());
 
 // GitHub App: credentials from the environment or data/github-app.json (written by /github/register).
 const publicUrl = (process.env.LEXCOMPILER_PUBLIC_URL || `http://localhost:${securityConfig.port}`).replace(/\/+$/, '');
+// HTTPS only when the public URL is https (redirect plain HTTP, send HSTS). Needs the proxy to be
+// trusted, or every request would look like plain HTTP.
+// The loopback default only serves req.ip and rate limits: redirects need LEXCOMPILER_TRUST_PROXY set
+// explicitly, since a proxy that is not on loopback would otherwise be redirected in a loop.
+if (publicUrl.startsWith('https://')) {
+  if (trustProxySetting(process.env.LEXCOMPILER_TRUST_PROXY) === undefined) console.warn('[security] LEXCOMPILER_PUBLIC_URL is https but LEXCOMPILER_TRUST_PROXY is not set; HTTPS redirects are off.');
+  else app.use(httpsOnly(publicUrl));
+}
+// Per-IP limits on the routes anyone can reach (Phase 7): webhooks, share pages and keys, sign-in.
+// LEXCOMPILER_RATE_LIMITS="webhooks=600,share=120,signin=30" (requests per minute) overrides them.
+const limits = Object.fromEntries(
+  (process.env.LEXCOMPILER_RATE_LIMITS || '')
+    .split(',')
+    .map((p) => p.split('=').map((s) => s.trim()))
+    .filter(([k, v]) => k && Number(v) > 0)
+    .map(([k, v]) => [k, Number(v)])
+) as Record<string, number>;
+app.use('/api/github/webhooks', rateLimit({ name: 'webhooks', windowMs: 60_000, max: limits.webhooks ?? 600 }));
+app.use(['/api/share', '/api/public/share', '/.well-known/lexcompiler'], rateLimit({ name: 'share links', windowMs: 60_000, max: limits.share ?? 120 }));
+app.use(['/api/auth/login', '/api/auth/callback', '/api/auth/password'], rateLimit({ name: 'sign-in', windowMs: 60_000, max: limits.signin ?? 30 }));
 const ghUrls = githubUrls();
 let githubApp: GitHubApp | null = null;
 try {
@@ -133,19 +170,31 @@ try {
   console.error(`[github] ${err instanceof Error ? err.message : String(err)}`);
 }
 const getGitHubApp = () => githubApp;
-const governance = new GovernanceStore(getDb());
-const evidenceLog = new EvidenceLog(getDb());
-const flowDeps: FlowDeps = { store: productStore, gov: governance, evidence: evidenceLog, queue: null, publicUrl };
+// A quick tunnel gets a new URL on every start. With LEXCOMPILER_GITHUB_SYNC_WEBHOOK=1 the server
+// points the App's webhook at LEXCOMPILER_GITHUB_WEBHOOK_URL itself, instead of someone editing
+// the App's settings on GitHub. Off by default: one App may serve several servers.
+if (githubApp && process.env.LEXCOMPILER_GITHUB_SYNC_WEBHOOK === '1' && process.env.LEXCOMPILER_GITHUB_WEBHOOK_URL) {
+  const hookUrl = process.env.LEXCOMPILER_GITHUB_WEBHOOK_URL;
+  githubApp
+    .syncWebhookUrl(hookUrl)
+    .then((previous) => console.log(previous === null ? `[github] The App's webhook already points at ${hookUrl}` : `[github] Pointed the App's webhook at ${hookUrl} (was ${previous || 'unset'})`))
+    .catch((err) => console.error(`[github] Could not update the App's webhook URL: ${err instanceof Error ? err.message : String(err)}`));
+}
+// The signed evidence log (Phase 5): the server's attestation key (local file, Cloud KMS or AWS KMS).
+// Local signing: one Ed25519 key per workspace in data/workspace-keys; KMS: the server's KMS key.
+const evidenceLog = new EvidenceLog(getDb(), workspaceSigners(dataDir()));
+const evidence = new EvidenceRecorder(evidenceLog, productStore);
+const keysFor = (workspaceId: string) =>
+  evidenceLog.publicKeys(workspaceId, [...trustedKeys(), legacyAttestationKey()], new Map(revocations().keys.map((k) => [k.keyId, k.revokedAt])));
+const governance = new GovernanceStore(getDb(), productStore);
+const commentJob = createCommentJobHandler({ getApp: getGitHubApp });
+const flowDeps: FlowDeps = { store: productStore, gov: governance, evidence, queue: null, publicUrl };
 const jobQueue: JobQueue = new JobQueue(
   getDb(),
   {
-    scan: createScanJobHandler({
-      store: productStore,
-      getApp: getGitHubApp,
-      publicUrl,
-      gov: governance,
-      recordEvidence: (scan, findings, checkRunUrl) => recordScanEvidence(flowDeps, scan, findings, { checkRunUrl }),
-    }),
+    scan: createScanJobHandler({ store: productStore, getApp: getGitHubApp, publicUrl, evidence, ai: new AiGateway(getDb()) }),
+    github_comment: commentJob,
+    pr_comment: commentJob,
     ...createGovernanceJobHandlers({ store: productStore, getApp: getGitHubApp, queue: () => jobQueue }),
   },
   { onError: (err, job) => console.error(`[jobs] ${job.kind} ${job.id} attempt ${job.attempt} failed: ${err instanceof Error ? err.message : String(err)}`) }
@@ -153,56 +202,129 @@ const jobQueue: JobQueue = new JobQueue(
 flowDeps.queue = jobQueue;
 // The webhook needs the raw body to check GitHub's signature, so it is registered before
 // express.json() and the /api guard (GitHub sends no browser headers).
-app.post('/api/github/webhooks', express.raw({ type: () => true, limit: '25mb' }), createWebhookHandler({ store: productStore, getApp: getGitHubApp, queue: jobQueue, relayReencoded: process.env.LEXCOMPILER_GITHUB_WEBHOOK_RELAY === 'smee', onRequestException: (input) => requestFromCheckRun(flowDeps, input) }));
+app.post('/api/github/webhooks', express.raw({ type: () => true, limit: '25mb' }), createWebhookHandler({ store: productStore, getApp: getGitHubApp, queue: jobQueue, onRequestException: (input) => requestFromCheckRun(flowDeps, input), relayReencoded: process.env.LEXCOMPILER_GITHUB_WEBHOOK_RELAY === 'smee' }));
+/** A repository's files at a commit: the local folder, or GitHub's archive with the installation token. */
+const openFixPr = async (repo: Repo, requestedBy: string) => {
+  const gh = getGitHubApp();
+  if (!gh) throw new StoreError('the GitHub App is not configured on this server', 503);
+  try {
+    return await openFixPullRequest({ store: productStore, app: gh }, repo, requestedBy);
+  } catch (err) {
+    // A fix that didn't pass the Z3 gate (or nothing to fix) is a 409 for the caller.
+    if (err instanceof FixPrError) throw new StoreError(err.message, err.status);
+    throw err;
+  }
+};
+const crewRuns = new CrewRunStore(getDb());
+/** The default branch's head and files, for the agent crew on a workspace repository. */
+const readRepoHead = async (repo: Repo) => {
+  if (repo.source === 'local' && repo.localPath) return { commitSha: 'working-tree', files: readRepositoryFilesAt(repo.localPath) };
+  const gh = getGitHubApp();
+  if (!gh || repo.installationId === null) throw new StoreError('The GitHub App is not configured on this server, so the default branch cannot be read.', 503);
+  const head = await gh.request<{ sha: string }>(repo.installationId, 'GET', `/repos/${repo.fullName}/commits/${encodeURIComponent(repo.defaultBranch)}`);
+  return { commitSha: head.sha, files: await readRepoFiles(repo, head.sha) };
+};
+const readRepoFiles = async (repo: Repo, sha: string) => {
+  if (repo.source === 'local' && repo.localPath) return readRepositoryFilesAt(repo.localPath);
+  const gh = getGitHubApp();
+  if (!gh || repo.installationId === null) throw new Error('The GitHub App is not configured on this server, so the default branch cannot be read.');
+  return (await readTarballSources(await gh.downloadTarball(repo.installationId, repo.fullName, sha))).files;
+};
+// Share links and public keys for auditors (Phase 5): no account, so outside the /api guard.
+app.use(createPublicEvidenceRouter({ store: productStore, log: evidenceLog, keysFor, publicUrl }));
+// The workspace MCP endpoint for coding assistants (Phase 4a). It authenticates with personal
+// access tokens and checks Origin itself, so it sits outside the /api guard, with its own body limit.
+app.use(
+  '/mcp',
+  createWorkspaceMcpRouter({
+    store: productStore,
+    security: securityConfig,
+    readRepoFiles,
+    flows: flowDeps,
+    resourceMetadataUrl: `${publicUrl}/.well-known/oauth-protected-resource`,
+  })
+);
 app.use(express.json({ limit: '5mb' }));
-// Auditor share pages and public keys: no account, the share token is the credential.
-app.use(createPublicRoutes({ store: productStore, gov: governance, evidence: evidenceLog }));
-// The workspace MCP server for coding assistants; personal access tokens, not cookies.
-app.post('/mcp', createWorkspaceMcpHandler({ store: productStore, gov: governance, flows: flowDeps, getApp: getGitHubApp, allowedOrigins: securityConfig.allowedOrigins }));
-app.all('/mcp', (_req, res) => {
-  res.setHeader('Allow', 'POST');
-  res.status(405).json({ error: 'Send MCP messages with POST; this server opens no event stream.' });
-});
-const oidcProvider = oidcConfig ? new OidcProvider(oidcConfig, databaseSessionStore(productStore)) : null;
+// Auditor share pages (the web app's view): no account, the share token is the credential.
+app.use(createPublicRoutes({ store: productStore, log: evidenceLog, keysFor, publicUrl }));
+const sessionStore = databaseSessionStore(productStore);
+const oidcProvider = oidcConfig ? new OidcProvider(oidcConfig, sessionStore) : null;
+const signInRequired = Boolean(oidcProvider) || securityConfig.passwordSignIn;
+// One sessions-aware browser auth for the OAuth consent pages and the GitHub pages.
+const browserAuth = createBrowserAuth(oidcProvider, { sessions: sessionStore, signInRequired });
+// OAuth for the MCP endpoint (Phase 4a): metadata, client registration, consent and tokens,
+// with the dashboard's sign-in. Outside the /api guard.
+app.use(['/oauth', '/.well-known/oauth-protected-resource', '/.well-known/oauth-authorization-server'], rateLimit({ name: 'oauth', windowMs: 60_000, max: limits.oauth ?? 60 }));
+app.use(createOAuthRouter({ store: productStore, db: getDb(), publicUrl, principal: (req) => browserAuth.principal(req), loginUrl: browserAuth.loginUrl }));
 // Expired sessions are also dropped when read; this keeps the table small.
 productStore.purgeExpiredSessions();
 setInterval(() => productStore.purgeExpiredSessions(), 60 * 60 * 1000).unref();
 // Resolve the build id once at startup (one git call), not on the first scan request.
 lexcompilerVersion();
-const sessionStore = databaseSessionStore(productStore);
-const signInRequired = Boolean(oidcProvider) || securityConfig.passwordSignIn;
 app.use('/api', createApiGuard(securityConfig, signInRequired ? createAuthenticator(oidcProvider, securityConfig.apiToken, sessionStore) : undefined));
 app.use(
   '/api',
   createProductRouter(productStore, oidcProvider, {
     reposRoot: process.env.LEXCOMPILER_PROJECT_REPOS_ROOT || path.join(process.cwd(), 'repos'),
+    // An approved rule rescans the default branch of each GitHub repository in its scope.
+    enqueueBranchScan: (repo, version) =>
+      repo.githubRepoId !== null && repo.installationId !== null
+        ? enqueueScan({ queue: jobQueue }, { githubRepoId: repo.githubRepoId, installationId: repo.installationId, kind: 'push', trigger: 'rule_approved' }, `rule:${version.id}:${repo.id}`)
+        : null,
+    mcpUrl: `${publicUrl}/mcp`,
+    evidence,
+    flows: flowDeps,
+    keysFor,
     ai: getAiGateway(),
     passwordSignIn: securityConfig.passwordSignIn,
-    onRuleDecided: (input) => ruleDecided(flowDeps, input),
-    onScanCompleted: (scan, findings) => recordScanEvidence(flowDeps, scan, findings),
+    publicUrl,
+    readRepoFiles,
+    refreshFeed: () => refreshRegulatoryFeed(productStore),
+    openFixPr,
+    crew: {
+      runs: crewRuns,
+      run: (repo, opts) => runWorkspaceCrew({ store: productStore, runs: crewRuns, readHead: readRepoHead, openFixPr: getGitHubApp() ? openFixPr : undefined, ai: getAiGateway() }, repo, opts),
+    },
     extra: (r, helpers) =>
       mountWorkspaceRoutes(r, helpers, {
         store: productStore,
         gov: governance,
-        evidence: evidenceLog,
         ai: getAiGateway(),
-        flows: flowDeps,
-        publicUrl,
         passwordSignIn: securityConfig.passwordSignIn,
         secureCookies: publicUrl.startsWith('https://'),
+        allowedOrigins: securityConfig.allowedOrigins,
       }),
   })
 );
-// Approved exceptions past their date expire, and affected pull requests are re-checked.
-const sweepExceptions = () => {
-  try {
-    expireExceptions(flowDeps);
-  } catch (err) {
-    console.error(`[exceptions] ${err instanceof Error ? err.message : String(err)}`);
-  }
-};
+// Approved exceptions past their date expire (one sweep: at startup and every 10 minutes); affected
+// pull requests are re-checked and each expiry is recorded as evidence.
+const sweepExceptions = () => void expireExceptions(flowDeps).catch((err) => console.error(`[exceptions] ${err instanceof Error ? err.message : String(err)}`));
 sweepExceptions();
 setInterval(sweepExceptions, 10 * 60 * 1000).unref();
+// Daily jobs (Phase 6): the regulation feed, and a scan of every repository's default branch
+// (GitHub repositories through the job queue). Checked hourly; each runs once a day, across restarts.
+// LEXCOMPILER_SCHEDULER=off turns them off.
+if (process.env.LEXCOMPILER_SCHEDULER !== 'off') {
+  const tick = () =>
+    runDueJobs({
+      store: productStore,
+      evidence,
+      // LEXCOMPILER_BACKUP_DIR turns on the daily backup (keep it on another disk or volume).
+      backup: process.env.LEXCOMPILER_BACKUP_DIR ? { dataDir: dataDir(), backupDir: path.resolve(process.env.LEXCOMPILER_BACKUP_DIR) } : undefined,
+      // LEXCOMPILER_TSA_URL: an RFC 3161 Time-Stamp Authority vouches daily for each workspace's newest evidence header.
+      timestamps: process.env.LEXCOMPILER_TSA_URL ? { tsaUrl: process.env.LEXCOMPILER_TSA_URL } : undefined,
+      // Regulation watch after the feed refresh, in workspaces whose AI is on.
+      ai: getAiGateway(),
+      enqueueGithubScan: (repo, dedupeKey) =>
+        repo.githubRepoId !== null && repo.installationId !== null
+          ? enqueueScan({ queue: jobQueue }, { githubRepoId: repo.githubRepoId, installationId: repo.installationId, kind: 'push', trigger: 'scheduled' }, dedupeKey)
+          : null,
+    })
+      .then((done) => done.forEach((d) => console.log(`[scheduler] ${d}`)))
+      .catch((err) => console.error(`[scheduler] ${err instanceof Error ? err.message : String(err)}`));
+  setTimeout(tick, 60 * 1000).unref();
+  setInterval(tick, 60 * 60 * 1000).unref();
+}
 app.use('/api', createGitHubApiRouter(getGitHubApp));
 
 /**
@@ -395,7 +517,7 @@ app.post('/api/mcp/:serverId/rpc', async (req, res) => {
 });
 
 // The agent crew: the model route for the Python agents, and chained crew runs (server/agents/routes.ts).
-app.use(createAgentRouter({ db: getDb(), gateway: getAiGateway, clauses: () => activeClauses }));
+app.use(createAgentRouter({ db: getDb(), gateway: getAiGateway, clauses: () => activeClauses, runs: crewRuns }));
 
 /** UI helper: runs tools/call and returns the full request/response trace. */
 app.post('/api/mcp/:serverId/invoke', async (req, res) => {
@@ -1058,6 +1180,16 @@ app.post('/api/llm/multi-model-pipeline', async (req, res) => {
       task: 'legal-attestation',
     });
 
+    // 4. A local reasoning model (deepseek-r1:1.5b) as an advisory critic. It thinks before it
+    // answers, so it gets room for the reasoning; Z3 still decides, so its verdict is only shown.
+    const reasoningLlmRes = await runRealLlmInference({
+      model: process.env.LEXCOMPILER_REASONING_MODEL || 'deepseek-r1:1.5b',
+      prompt: `Rule: "${legalText}"\nCode:\n${snippet}\nDoes the code violate the rule? Think briefly, then end with one line: VERDICT: VIOLATION or VERDICT: COMPLIANT.`,
+      maxTokens: 1200,
+      timeoutMs: 90_000,
+      task: 'reasoning-critic',
+    });
+
     res.json({
       executedAt: new Date().toISOString(),
       neuralEmbedding: {
@@ -1070,6 +1202,7 @@ app.post('/api/llm/multi-model-pipeline', async (req, res) => {
       },
       codeSpecialistLlm: codeLlmRes,
       generalCounselLlm: legalLlmRes,
+      reasoningCriticLlm: { ...reasoningLlmRes, responseText: reasoningLlmRes.responseText.replace(/<think>[\s\S]*?<\/think>/, '').trim() },
     });
   } catch (err) {
     sendError(res, err);
@@ -1178,7 +1311,7 @@ app.use(
     onRegistered: (credentials) => {
       githubApp = new GitHubApp(credentials, ghUrls);
     },
-    auth: createBrowserAuth(oidcProvider, { sessions: sessionStore, signInRequired }),
+    auth: browserAuth,
     publicUrl,
     urls: ghUrls,
     webhookUrl: process.env.LEXCOMPILER_GITHUB_WEBHOOK_URL || `${publicUrl}/api/github/webhooks`,

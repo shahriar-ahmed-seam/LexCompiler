@@ -37,6 +37,8 @@ export interface CheckOutput {
 }
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+/** "1 January 2027" (UTC), as Legal wrote the date. */
+const longDate = (iso: string) => new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
 const cell = (s: string) => s.replace(/\|/g, '\\|').replace(/\s+/g, ' ').trim();
 const STATE_ORDER = { new: 0, existing: 1, waived: 2 } as const;
 const LEVEL = { new: 'failure', existing: 'warning', waived: 'notice' } as const;
@@ -51,10 +53,14 @@ export function renderCheckOutput(input: {
   filesScanned: number;
   truncated: boolean;
   lexcompilerVersion: string;
+  /** "1 finding waived until 30 Nov 2026", shown under the counts. */
+  waiverLine?: string | null;
+  /** The signed evidence record of this scan, so the run (timestamped by GitHub) names it. */
+  evidence?: { seq: number; headerSha256: string } | null;
+  /** Approved versions not yet in effect, with what they would find: warnings, never failures. */
+  upcoming?: Array<{ ruleKey: string; version: number; effectiveFrom: string; findings: Array<{ filePath: string; startLine: number; endLine: number; message: string }> }>;
   /** Approved exceptions behind waived findings, by exception id. */
   waivers?: Record<string, { expiresAt: string | null; reason: string; decidedBy: string | null }>;
-  /** The signed evidence record of this scan. */
-  evidence?: { seq: number; headerSha256: string } | null;
 }): CheckOutput {
   const { summary: s, kind, defaultBranch } = input;
   const titles = new Map(input.rules.map((r) => [r.ruleKey, r.title]));
@@ -77,6 +83,7 @@ export function renderCheckOutput(input: {
       ? `**${s.newCount} new** · ${s.existingCount} ${existingLabel} · ${s.waivedCount} waived by an approved exception`
       : `**${s.existingCount + s.newCount} ${existingLabel}** · ${s.waivedCount} waived by an approved exception. A pull request fails only for findings it adds.`
   );
+  if (input.waiverLine) lines.push('', input.waiverLine);
   if (s.undecidedRuleKeys.length > 0) {
     lines.push('', `⚠️ Z3 could not decide ${s.undecidedRuleKeys.join(', ')} within its time limit. These rules are not counted as passing; ask Legal to review.`);
   }
@@ -84,6 +91,11 @@ export function renderCheckOutput(input: {
   for (const r of input.rules) {
     const row = s.perRule.find((p) => p.ruleKey === r.ruleKey);
     lines.push(`| ${r.ruleKey} v${r.version} | ${cell(r.title)} | ${row?.newCount ?? 0} | ${row?.existingCount ?? 0} | ${row?.waivedCount ?? 0} |`);
+  }
+  const upcoming = (input.upcoming ?? []).filter((u) => u.findings.length > 0);
+  if (upcoming.length > 0) {
+    lines.push('', '### Coming up', '');
+    for (const u of upcoming) lines.push(`- **${u.ruleKey} v${u.version}** takes effect on ${longDate(u.effectiveFrom)}: ${plural(u.findings.length, 'finding')} here will fail from then.`);
   }
   const newFindings = input.findings.filter((f) => f.state === 'new');
   if (newFindings.length > 0) {
@@ -103,7 +115,6 @@ export function renderCheckOutput(input: {
     }
   }
   lines.push('', `[Open this scan in LexCompiler](${input.detailsUrl})`);
-  if (input.evidence) lines.push('', `Signed evidence record #${input.evidence.seq} · header SHA-256 \`${input.evidence.headerSha256.slice(0, 16)}…\``);
   if (input.truncated) lines.push('', '_This repository has more source files than one scan reads; some files were not checked._');
   lines.push(
     '',
@@ -111,7 +122,20 @@ export function renderCheckOutput(input: {
     // re-encode JSON (smee) break the signature of bodies containing <, > or &.
     `_${plural(input.filesScanned, 'source file')} scanned · rules ${input.rules.map((r) => `${r.ruleKey} v${r.version}`).join(', ')} · LexCompiler ${input.lexcompilerVersion}_`
   );
+  if (input.evidence) lines.push('', `Evidence record #${input.evidence.seq} · header SHA-256 \`${input.evidence.headerSha256}\``);
 
+  const upcomingAnnotations = upcoming.flatMap((u) =>
+    u.findings.map(
+      (f): CheckAnnotation => ({
+        path: f.filePath,
+        start_line: f.startLine,
+        end_line: Math.max(f.startLine, f.endLine),
+        annotation_level: 'warning',
+        title: `${u.ruleKey} v${u.version} · from ${longDate(u.effectiveFrom)}`.slice(0, 255),
+        message: `Will fail from ${longDate(u.effectiveFrom)}: ${f.message}`.slice(0, 4000),
+      })
+    )
+  );
   const annotations = [...input.findings]
     .sort((a, b) => STATE_ORDER[a.state] - STATE_ORDER[b.state] || a.filePath.localeCompare(b.filePath) || a.startLine - b.startLine)
     .slice(0, MAX_ANNOTATIONS)
@@ -124,7 +148,10 @@ export function renderCheckOutput(input: {
         title: `${f.ruleKey} · ${titles.get(f.ruleKey) ?? ''}`.slice(0, 255),
         message: (f.state === 'existing' ? `${f.message} (already on ${defaultBranch})` : f.state === 'waived' ? `${f.message} (waived by an approved exception)` : f.message).slice(0, 4000),
       })
-    );
+    )
+    .concat(upcomingAnnotations)
+    .slice(0, MAX_ANNOTATIONS);
+  if (upcoming.length > 0 && !title.includes('new finding')) title = `${title} · ${upcoming.map((u) => `${u.ruleKey} v${u.version}`).join(', ')} will fail from ${longDate(upcoming[0].effectiveFrom)}`;
   return { title: title.slice(0, 255), summary: lines.join('\n').slice(0, 65000), annotations };
 }
 

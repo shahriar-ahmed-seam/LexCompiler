@@ -70,6 +70,8 @@ export interface ExceptionRecord {
   reason: string;
   requesterLabel: string | null;
   requestedFrom: string | null;
+  /** The date the requester asked for (an assistant may leave it to Legal). */
+  requestedUntil?: string | null;
   requestedAt: string;
   prNumber: number | null;
   scanId: string | null;
@@ -157,6 +159,8 @@ export interface RuleCard {
   ai: { mode: 'off' | 'local' | 'cloud'; status: string; model: string | null; endpointHost: string | null; detail: string | null; tokens: number; latencyMs: number };
   highlights: Array<{ start: number; end: number; kind: 'value' | 'obligation' | 'quote' }>;
   plainReading: string;
+  /** Values besides the number that still need Legal, for example the allowed regions; approval waits for them. */
+  openValues?: Array<{ field: string; label: string; value: number | boolean | string[] | null; source: 'parser' | 'model' | 'legal' | 'question'; question: string | null }>;
   reviewNotes: string[];
   impact: Array<{ repoId: string; repoFullName: string; commitSha: string; scannedAt: string | null; failing: number; locations: Array<{ filePath: string; line: number; explanation: string }> }>;
   compiled: { smtLib2: string; rego: string; formula: string };
@@ -169,7 +173,8 @@ export interface EvidenceRecord {
   headerSha256: string;
   signature: string;
   body: Record<string, unknown>;
-  bodyJson: string;
+  /** Absent on a withheld record (a share shows headers only for those). */
+  bodyJson?: string;
   kind: string;
   text: string;
   link: string | null;
@@ -200,7 +205,8 @@ export interface TokenRecord {
   id: string;
   userName: string | null;
   name: string;
-  hint: string;
+  /** Last characters of the token; absent for tokens made by a sign-in flow. */
+  hint: string | null;
   createdAt: string;
   expiresAt: string;
   lastUsedAt: string | null;
@@ -227,6 +233,7 @@ const PERMS = {
   editRules: ['legal'],
   decideExceptions: ['legal'],
   requestExceptions: ['owner', 'legal', 'engineer'],
+  runScans: ['owner', 'legal', 'engineer'],
   createShares: ['owner', 'legal'],
 } as const;
 

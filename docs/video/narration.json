@@ -1,0 +1,13 @@
+{
+  "voices": { "en": "JBFqnCBsd6RMkjVDRZzb", "bn": "JBFqnCBsd6RMkjVDRZzb" },
+  "scenes": [
+    { "id": "problem", "lang": "en", "text": "Every week, a bank's legal team reads new regulations, while its engineers ship hundreds of commits. Nobody can check by hand that the code still obeys the law. LexCompiler closes that gap: it compiles legal text into formal rules, and proves with the Z3 solver whether the code obeys them." },
+    { "id": "compile", "lang": "en", "text": "Here, a data-protection clause becomes deontic logic, SMT-LIB and Rego. The polyglot mapper reads SQL, Python and TypeScript, and Z3 answers with either a proof, or a concrete counterexample." },
+    { "id": "legal", "lang": "en", "text": "In the legal workspace, a lawyer reads each rule as a plain-language card and approves it. Approval rescans the main branch within seconds. A version that takes effect in January 2027 appears under Coming up, so engineers see it before it fails anything." },
+    { "id": "pull-request", "lang": "en", "text": "On GitHub, every pull request is checked. This one lowers an AI approval threshold to fifty-five percent. LexCompiler fails the check with Z3's counterexample, suggests the exact fix, warns about the 2027 rule, and adds an AI explanation that may cite only the text it retrieved." },
+    { "id": "agents", "lang": "en", "text": "Behind it, six agents work as a chain: a CrewAI horizon scanner, a DSPy deontic extractor, a Hermes code mapper on a local Ollama model, LangGraph graph RAG, a Pydantic-AI Z3 critic, and an OpenAI Agents SDK remediation agent. A fix pull request opens only when Z3 proves the patch." },
+    { "id": "stack", "lang": "en", "text": "Retrieval is contextual RAG with semantic chunking, keyword and vector search fused by rank, and a knowledge graph. Local models run on Ollama on a six-gigabyte laptop GPU, and every cloud call goes through a budgeted gateway that logs its tokens. Six MCP servers we built expose these tools over stdio and HTTP, and a Cloudflare tunnel connects the local server to GitHub." },
+    { "id": "bangla", "lang": "bn", "text": "লেক্সকম্পাইলার আইনের ভাষাকে কোডের প্রমাণযোগ্য নিয়মে রূপান্তর করে, বাংলা আর ইংরেজি দুই ভাষাতেই।" },
+    { "id": "close", "lang": "en", "text": "Every approval and every check is written to a signed, hash-chained evidence log. LexCompiler: compliance you can prove. Built by Shahriar Ahmed Seam and Shakil Ahmed." }
+  ]
+}

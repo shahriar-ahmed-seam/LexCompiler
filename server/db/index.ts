@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { MIGRATIONS } from './migrations.js';
+import { MIGRATIONS, reconcileSeamLineage } from './migrations.js';
 
 /**
  * The product database. All SQL lives behind this module and the stores built on it, so the
@@ -38,6 +38,9 @@ export function closeDb(): void {
 
 function migrate(db: Db): void {
   db.exec('CREATE TABLE IF NOT EXISTS schema_migrations (id INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)');
+  // A database built by the other development line numbers 4-6 differently; bring it onto this
+  // numbering first (a no-op everywhere else).
+  transaction(db, () => reconcileSeamLineage(db));
   const applied = new Set(
     (db.prepare('SELECT id FROM schema_migrations').all() as Array<{ id: number }>).map((r) => Number(r.id))
   );

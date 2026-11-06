@@ -158,6 +158,8 @@ export function NewRulePage() {
   const [category, setCategory] = useState<string | null>(null);
   const [card, setCard] = useState<RuleCard | null>(null);
   const [value, setValue] = useState('');
+  // Allowed regions, comma-separated: the one non-numeric value Legal can be asked for.
+  const [regions, setRegions] = useState('');
   // Today's date where the lawyer is (not UTC), as YYYY-MM-DD.
   const today = new Date().toLocaleDateString('en-CA');
   const [effective, setEffective] = useState(today);
@@ -172,15 +174,18 @@ export function NewRulePage() {
     }
   }, [baseRule, text]);
 
+  const regionList = regions.split(',').map((r) => r.trim().toLowerCase()).filter(Boolean);
   const analyze = async (cat: string | null = category) => {
     if (!text.trim()) return;
     setBusy('analyze');
     setError(null);
     try {
-      const c = await api<RuleCard>(`/workspaces/${workspace.id}/rules/analyze`, { body: { text, ...(cat ? { category: cat } : {}) } });
+      const c = await api<RuleCard>(`/workspaces/${workspace.id}/rules/analyze`, { body: { text, ...(cat ? { category: cat } : {}), ...(regionList.length ? { values: { allowedDataRegions: regionList } } : {}) } });
       setCard(c);
       setCategory(c.category);
       setValue(c.value.value == null ? '' : String(c.value.value));
+      const shown = c.openValues?.find((v) => v.field === 'allowedDataRegions');
+      if (shown && Array.isArray(shown.value) && shown.value.length) setRegions(shown.value.join(', '));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -190,7 +195,8 @@ export function NewRulePage() {
 
   const field = card?.value.field ?? null;
   const numeric = value.trim() === '' ? null : Number(value);
-  const valueMissing = Boolean(field) && (numeric === null || !Number.isFinite(numeric));
+  const needsRegions = card?.category === 'CROSS_BORDER_TRANSFER';
+  const valueMissing = (Boolean(field) && (numeric === null || !Number.isFinite(numeric))) || (needsRegions && regionList.length === 0);
   const changedByLegal = Boolean(card && field && numeric !== null && numeric !== card.value.value);
 
   const save = async (approve: boolean) => {
@@ -198,9 +204,10 @@ export function NewRulePage() {
     setBusy(approve ? 'approve' : 'draft');
     setError(null);
     try {
-      const values = field && numeric !== null ? { [field]: numeric } : {};
+      const values: Record<string, unknown> = field && numeric !== null ? { [field]: numeric } : {};
+      if (needsRegions && regionList.length) values.allowedDataRegions = regionList;
       const draft = await api<{ rule: { id: string; key: string }; version: { id: string; version: number } }>(`/workspaces/${workspace.id}/rules`, {
-        body: { rawLegalText: text, title: title.trim() || card.categoryLabel, citation: citation.trim() || undefined, category: card.category, values, ...(ruleId ? { ruleId } : {}) },
+        body: { rawLegalText: text, title: title.trim() || card.categoryLabel, citation: citation.trim() || undefined, category: card.category, values, useAi: false, ...(ruleId ? { ruleId } : {}) },
       });
       if (approve) {
         await api(`/workspaces/${workspace.id}/rule-versions/${draft.version.id}/approve`, {
@@ -349,8 +356,18 @@ export function NewRulePage() {
                       )}
                     </div>
                   </div>
-                ) : (
+                ) : needsRegions ? null : (
                   <p className="text-sm text-zinc-500">This category has no number to set.</p>
+                )}
+
+                {needsRegions && (
+                  <div className="rounded-xl border border-zinc-200 bg-zinc-50/60 p-4">
+                    <div className="text-sm font-medium text-zinc-800">Allowed regions</div>
+                    <div className="mt-2">
+                      <Input aria-label="Allowed regions" value={regions} onChange={(e) => setRegions(e.target.value)} placeholder="eu-central-1, eu-west-1" />
+                    </div>
+                    <p className="mt-2 text-sm text-zinc-600">Comma-separated region ids. Personal data may only be stored or sent in these regions; a region the clause does not name is never assumed.</p>
+                  </div>
                 )}
 
                 <div>

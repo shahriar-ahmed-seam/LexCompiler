@@ -4,6 +4,7 @@ import {
   getInitialClauses,
   getMutationPresets,
   inferRuleCategoryFromProse,
+  inferRuleCategoryWithEvidence,
 } from './compiler/legalCompiler.js';
 
 describe('rule category inference', () => {
@@ -66,5 +67,7 @@ describe('rule category inference', () => {
     expect(inferRuleCategoryFromProse('This agreement is governed by the laws of Germany.', 'ENCRYPTION_AT_REST')).toBe(
       'ENCRYPTION_AT_REST'
     );
+    expect(inferRuleCategoryWithEvidence('Which fields does the patient intake payload collect?')).toBeNull();
+    expect(inferRuleCategoryWithEvidence('Never write unredacted email addresses to application logs.')).toBe('PII_LOGGING_BAN');
   });
 });

@@ -9,6 +9,7 @@ const TOOLS: Array<[string, string]> = [
   ['check_changes', 'Checks the files you changed, laid over the default branch: the same findings the pull-request check would report.'],
   ['list_rules', 'The rules in effect for a repository, in plain language, with who approved them.'],
   ['explain_finding', 'The rule text behind a finding, its approval, and how code usually satisfies it.'],
+  ['suggest_fix', 'A unified diff for one finding, offered only when Z3 proves the rule holds after the patch. It never edits files itself.'],
   ['request_exception', 'Asks Legal for a time-limited exception. It cannot approve anything.'],
   ['search_obligations', 'Finds approved obligations by meaning, e.g. "can we log phone numbers?"'],
 ];
@@ -30,7 +31,7 @@ function snippet(client: Client, url: string, token: string | null): { label: st
     case 'kiro':
       return {
         label: '.kiro/settings/mcp.json (this project) or ~/.kiro/settings/mcp.json',
-        code: JSON.stringify({ mcpServers: { lexcompiler: { url, headers: { Authorization: 'Bearer ${LEXCOMPILER_TOKEN}' }, autoApprove: ['list_rules', 'check_changes', 'explain_finding', 'search_obligations'] } } }, null, 2),
+        code: JSON.stringify({ mcpServers: { lexcompiler: { url, headers: { Authorization: 'Bearer ${LEXCOMPILER_TOKEN}' }, autoApprove: ['list_rules', 'check_changes', 'explain_finding', 'suggest_fix', 'search_obligations'] } } }, null, 2),
         note: 'Kiro asks you once to allow ${LEXCOMPILER_TOKEN}. The tools appear in the MCP panel, and Kiro reads AGENTS.md.',
       };
     case 'claude-code':
@@ -55,14 +56,15 @@ function snippet(client: Client, url: string, token: string | null): { label: st
 export function AssistantsPage() {
   const { workspace, me } = useSession();
   const toast = useToast();
-  const tokens = useApi<TokenRecord[]>(`/workspaces/${workspace.id}/tokens`);
+  const everyone = workspace.role === 'owner' || workspace.role === 'admin';
+  const tokens = useApi<{ mcpUrl: string; tokens: TokenRecord[] }>(`/workspaces/${workspace.id}/tokens${everyone ? '?all=1' : ''}`);
   const calls = useApi<AssistantCall[]>(`/workspaces/${workspace.id}/assistant-calls?limit=30`, { pollMs: 5000 });
   const [name, setName] = useState('Kiro on my laptop');
   const [days, setDays] = useState('30');
   const [fresh, setFresh] = useState<TokenRecord | null>(null);
   const [client, setClient] = useState<Client>('kiro');
   const [busy, setBusy] = useState(false);
-  const url = `${window.location.origin}/mcp`;
+  const url = tokens.data?.mcpUrl ?? `${window.location.origin}/mcp`;
   const create = async () => {
     setBusy(true);
     try {
@@ -137,7 +139,7 @@ export function AssistantsPage() {
               <CodeBlock label={s.label} code={s.code} />
               <p className="text-sm text-zinc-500">{s.note}</p>
               <Notice tone="gray">
-                Then ask your assistant: <em>“Check my changes with LexCompiler before I commit.”</em> Server: <Mono>{url}</Mono> (Streamable HTTP, MCP 2025-06-18).
+                Then ask your assistant: <em>“Check my changes with LexCompiler before I commit.”</em> Server: <Mono>{url}</Mono> (Streamable HTTP).
               </Notice>
             </div>
           </Card>
@@ -183,12 +185,12 @@ export function AssistantsPage() {
               <ShieldCheck className="mt-0.5 size-4 shrink-0 text-emerald-600" /> No tool can approve rules or exceptions, change rules, or see another workspace.
             </p>
           </Card>
-          <Card title="Your tokens" padded={false}>
-            {!tokens.data?.length ? (
+          <Card title={everyone ? 'Workspace tokens' : 'Your tokens'} padded={false}>
+            {!tokens.data?.tokens.length ? (
               <EmptyState title="No tokens yet" />
             ) : (
               <ul className="divide-y divide-zinc-100">
-                {tokens.data.map((t) => (
+                {tokens.data.tokens.map((t) => (
                   <li key={t.id} className="flex items-start gap-3 px-5 py-3">
                     <KeyRound className="mt-0.5 size-4 text-zinc-400" />
                     <div className="min-w-0 flex-1">
@@ -197,7 +199,7 @@ export function AssistantsPage() {
                         {t.status === 'active' ? <Badge tone="green">Active</Badge> : <Badge tone="gray">{t.status}</Badge>}
                       </div>
                       <div className="mt-0.5 text-xs text-zinc-500">
-                        …{t.hint} · {t.lastUsedAt ? `used ${timeAgo(t.lastUsedAt)}${t.lastClient ? ` by ${t.lastClient}` : ''}` : 'never used'} · expires {formatDate(t.expiresAt)}
+                        {t.hint ? `…${t.hint} · ` : ''}{everyone && t.userName ? `${t.userName} · ` : ''}{t.lastUsedAt ? `used ${timeAgo(t.lastUsedAt)}${t.lastClient ? ` by ${t.lastClient}` : ''}` : 'never used'} · expires {formatDate(t.expiresAt)}
                       </div>
                     </div>
                     {t.status === 'active' && (

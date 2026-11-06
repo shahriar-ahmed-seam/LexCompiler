@@ -4,6 +4,8 @@
 
 `Domain: JusticeSphere AI / ComplianceOS / GovernanceIQ` | `Engine: Microsoft Z3 (z3-solver) + OPA Rego + Polyglot AST` | `Protocol: MCP JSON-RPC 2.0 (2025-03-26)`
 
+![LexCompiler: the problem, the workflow and the architecture](docs/submission/lexcompiler-architecture.png)
+
 ---
 
 ## Abstract
@@ -209,6 +211,9 @@ Coding assistants connect to `POST /mcp` with a token from the Coding assistants
 | `npm run verify:realworld` | End-to-end sandbox demo |
 | `npm run setup:sandbox` | Creates `.venv` with the real FastAPI, Pydantic, httpx and Redis packages for the runtime sandbox |
 | `npm run sarif` | Writes `lexcompiler.sarif` (SARIF v2.1.0) for the scanned repository |
+| `npm run seed:demo` | Creates the demo workspace "FinHealth AI" (`-- --activate-builtins` approves R-1 to R-4) |
+| `npm run setup:keycloak` | Starts a local Keycloak in Docker with the `lexcompiler` realm, client, admin role and two test users, and writes the OIDC settings to `<data dir>/keycloak/oidc.env` |
+| `npm run eval:rag` | Scores retrieval on the labelled RAG dataset |
 
 ### Scanning Your Own Repository
 
@@ -253,6 +258,8 @@ LexCompiler runs as a GitHub App. On every pull request it adds a check run name
 
 In production, set the credentials with environment variables instead (see the configuration reference). `GET /api/github/app` reports whether an app is configured; it returns no secrets.
 
+A Cloudflare quick tunnel gets a new URL on every start. With `LEXCOMPILER_GITHUB_SYNC_WEBHOOK=1` and `LEXCOMPILER_GITHUB_WEBHOOK_URL` set, the server points the GitHub App's webhook at that URL when it starts; otherwise update it in the App's settings.
+
 ### Opening Remediation Pull Requests on GitHub
 
 ```bash
@@ -277,6 +284,27 @@ Workspaces (`/api/workspaces`) hold one company's members, repositories, counter
 | View everything in the workspace | ✓ | ✓ | ✓ | ✓ |
 
 A rule is enforced only after Legal approves a version of it. Each version freezes the compiled clause, and scans record the rule versions, their hashes and the LexCompiler build they ran with. People are invited by email and join at their first sign-in. Local repositories must live inside `LEXCOMPILER_PROJECT_REPOS_ROOT` (default `repos/`). `npm run seed:demo -- --activate-builtins` creates the demo workspace "FinHealth AI" with the four built-in clauses approved as R-1 to R-4.
+
+### The Legal Workspace (`/legal`)
+
+Signed-in members work at `/legal`: documents and clauses, rule cards that Legal drafts and approves, and a "Changes" panel. Approving a rule rescans `main` of every GitHub repository in its scope. A version approved with a later effective date fails nothing yet; it shows under "Coming up", and pull request checks list its findings as warnings ("R-3 v2 will fail from 1 January 2027"). The panel also shows the regulation feed with "Draft rule change", and each counterparty's paths: a rule scoped to counterparties is proven only on their paths.
+
+For a local identity provider, `npm run setup:keycloak` starts Keycloak 26 on `127.0.0.1:8080`; start the server with `--env-file=<data dir>/keycloak/oidc.env`.
+
+### AI Features (opt-in per workspace)
+
+Each workspace's owner chooses its AI mode (`PUT /api/workspaces/<id>/ai`: `off`, `local` or `cloud`, with a daily token budget); `LEXCOMPILER_AI_MAX_DAILY_TOKENS` is the operator's ceiling over all workspaces. Every call is logged (`GET /api/workspaces/<id>/ai/calls`). A task uses its own model settings, `LEXCOMPILER_AGENT_<TASK>_*` (`DRAFTING`, `EXPLANATION`, `FIX`, `REGULATION_WATCH`), or `LEXCOMPILER_LLM_*`; a task with neither is skipped.
+
+| Feature | What the model does | What keeps it honest |
+| :--- | :--- | :--- |
+| AI explanations on pull requests | Two or three sentences per new finding, in the check run's details | Only retrieved chunks may be cited; it never changes the check's result |
+| Model-written fixes on pull requests (cloud only) | Replacement lines for a new finding with no template fix | Posted only if the file parses, Z3 no longer finds the rule and the rescan finds nothing new |
+| Regulation watch (`POST …/feed/watch`, and daily) | A two-sentence summary of each feed item | The rules it may affect come from the item's category, not the model; it never drafts or approves |
+| Fix agent (in the agent crew) | Fixes for findings when the template patch fails the Z3 gate | The same checks as fixes on PRs; shown as suggestions, never committed |
+
+### The Agent Crew on Workspace Repositories
+
+The six agents (AGENTS.md §2) run as a chain, each receiving the previous one's findings, on any workspace repository: `POST /api/workspaces/<id>/repos/<repoId>/crew-runs` with `{ "openPullRequest": true, "allRules": true }` (the "Agent crew" panel on `/legal`). Each rule is checked only on its scope's paths, and a fix pull request is opened only when the patch passes the Z3 gate. Runs are stored per workspace (`GET …/crew-runs`, `GET …/crew-runs/<runId>`).
 
 ### LLM Agents and Framework Adapters
 
@@ -413,4 +441,9 @@ Built-in clauses and curated feed items are **illustrative**: they paraphrase th
 
 ## License
 
-MIT License (see [`LICENSE`](LICENSE)). Built by Shahriar Ahmed Seam for the International AI Builders Congress (JusticeSphere AI — ComplianceOS / GovernanceIQ Track).
+MIT License (see [`LICENSE`](LICENSE)). Built for the International AI Builders Congress (JusticeSphere AI — ComplianceOS / GovernanceIQ Track) by:
+
+- **Shahriar Ahmed Seam** ([@shahriar-ahmed-seam](https://github.com/shahriar-ahmed-seam))
+- **Shakil Ahmed** ([@MRSHAKILS](https://github.com/MRSHAKILS))
+
+More detail: [`docs/PRODUCT_GUIDE.md`](docs/PRODUCT_GUIDE.md) (the product and its phases), [`docs/HANDOFF.md`](docs/HANDOFF.md) (current state and live runs), [`docs/DEPLOY.md`](docs/DEPLOY.md) (deployment).

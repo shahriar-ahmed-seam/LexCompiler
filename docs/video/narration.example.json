@@ -1,0 +1,7 @@
+{
+  "voices": { "en": "JBFqnCBsd6RMkjVDRZzb", "bn": "JBFqnCBsd6RMkjVDRZzb" },
+  "scenes": [
+    { "id": "intro", "lang": "en", "text": "LexCompiler turns legal rules into checks that run on every pull request." },
+    { "id": "intro-bn", "lang": "bn", "text": "লেক্সকম্পাইলার আইনের ভাষাকে কোডের নিয়মে রূপান্তর করে।" }
+  ]
+}

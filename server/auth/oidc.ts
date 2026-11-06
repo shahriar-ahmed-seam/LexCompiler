@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { safeReturnPath } from '../../shared/safePath.js';
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from 'jose';
 
 /** Global role from the identity provider. Project roles come from project membership. */
@@ -169,7 +170,7 @@ export class OidcProvider {
     const state = b64url(crypto.randomBytes(24));
     const verifier = b64url(crypto.randomBytes(32));
     const nonce = b64url(crypto.randomBytes(16));
-    this.pending.set(state, { verifier, nonce, returnTo: returnTo.startsWith('/') && !returnTo.startsWith('//') ? returnTo : '/', expires: now + LOGIN_TTL_MS });
+    this.pending.set(state, { verifier, nonce, returnTo: safeReturnPath(returnTo, '/'), expires: now + LOGIN_TTL_MS });
     const url = new URL(d.authorization_endpoint);
     url.search = new URLSearchParams({
       response_type: 'code',

@@ -104,6 +104,18 @@ export class GitHubApp {
     return (text ? JSON.parse(text) : {}) as T;
   }
 
+  /**
+   * Points the App's webhook at `url` (GET, then PATCH /app/hook/config as the app) unless it
+   * already does. Returns the previous URL when it changed it, or null.
+   */
+  async syncWebhookUrl(url: string): Promise<string | null> {
+    const jwt = await this.appJwt();
+    const config = await this.call<{ url?: string }>(jwt, 'GET', '/app/hook/config');
+    if (config.url === url) return null;
+    await this.call(jwt, 'PATCH', '/app/hook/config', { url });
+    return config.url ?? '';
+  }
+
   /** Installation tokens last an hour. One is reused until five minutes before it expires; none is stored. */
   async installationToken(installationId: number): Promise<string> {
     const cached = this.tokens.get(installationId);

@@ -7,7 +7,7 @@ import { can, type ExceptionRecord } from '../types';
 
 const VIA: Record<string, { label: string; icon: React.ReactNode }> = {
   github: { label: 'GitHub', icon: <GitPullRequest className="size-3.5" /> },
-  mcp: { label: 'coding assistant', icon: <Bot className="size-3.5" /> },
+  assistant: { label: 'coding assistant', icon: <Bot className="size-3.5" /> },
   dashboard: { label: 'LexCompiler', icon: <LayoutDashboard className="size-3.5" /> },
 };
 
@@ -122,6 +122,7 @@ export function ExceptionsPage() {
                   <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-zinc-500">
                     {VIA[e.requestedFrom ?? '']?.icon}
                     Requested by <span className="font-medium text-zinc-700">{e.requesterLabel}</span> from {VIA[e.requestedFrom ?? '']?.label ?? 'LexCompiler'} · {timeAgo(e.requestedAt)}
+                    {e.status === 'requested' && e.requestedUntil && <> · asked for until {formatDate(e.requestedUntil)}</>}
                   </div>
                   {e.decidedAt && (
                     <div className="mt-1 text-xs text-zinc-500">
@@ -159,7 +160,7 @@ export function ExceptionsPage() {
         footer={
           <>
             <Button onClick={() => setDeciding(null)}>Cancel</Button>
-            <Button variant={deciding?.decision === 'approve' ? 'success' : 'danger'} loading={busy} onClick={submit}>
+            <Button variant={deciding?.decision === 'approve' ? 'success' : 'danger'} loading={busy} disabled={deciding?.decision === 'approve' && !note.trim()} onClick={submit}>
               {deciding?.decision === 'approve' ? 'Approve exception' : deciding?.decision === 'reject' ? 'Reject request' : 'Revoke'}
             </Button>
           </>
@@ -177,7 +178,7 @@ export function ExceptionsPage() {
             </div>
           </Field>
         )}
-        <Field label={deciding?.decision === 'approve' ? 'Conditions or reason' : 'Reason'} htmlFor="note">
+        <Field label={deciding?.decision === 'approve' ? 'Conditions or reason' : 'Reason'} htmlFor="note" hint={deciding?.decision === 'approve' ? 'Required: it is signed into the evidence log with your decision.' : undefined}>
           <Textarea id="note" rows={3} value={note} onChange={(ev) => setNote(ev.target.value)} placeholder={deciding?.decision === 'approve' ? 'Accepted until LN-12 adds tenant-key storage.' : 'Fix it before merging: the endpoint handles patient data.'} />
         </Field>
       </Modal>

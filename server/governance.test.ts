@@ -10,14 +10,16 @@ import { INITIAL_REPO_FILES } from './analyzer/repoBaseline.js';
 import { hashPassword } from './auth/passwords.js';
 import { openDatabase } from './db/index.js';
 import { EvidenceLog, verifyEntries } from './evidence/log.js';
-import { createWorkspaceMcpHandler } from './mcp/workspaceMcp.js';
+import { EvidenceRecorder } from './evidence/records.js';
+import { createPublicEvidenceRouter } from './evidence/share.js';
+import { workspaceSigners } from './evidence/signer.js';
+import { createWorkspaceMcpRouter, STATELESS_VERSION } from './mcp/workspaceServer.js';
 import type { FlowDeps } from './product/flows.js';
 import { GovernanceStore } from './product/governance.js';
 import { createPublicRoutes } from './product/publicRoutes.js';
 import { createAuthenticator, createProductRouter } from './product/router.js';
 import { databaseSessionStore, ProductStore } from './product/store.js';
 import { mountWorkspaceRoutes } from './product/workspaceRoutes.js';
-import { recordScanEvidence, ruleDecided } from './product/flows.js';
 import { createApiGuard, resolveServerSecurityConfig } from './security.js';
 
 const LOAN_ENDPOINT = `import logging
@@ -61,9 +63,11 @@ beforeAll(async () => {
   const db = openDatabase(path.join(dir, 'lexcompiler.db'));
   store = new ProductStore(db);
   gov = new GovernanceStore(db);
-  evidence = new EvidenceLog(db);
+  evidence = new EvidenceLog(db, workspaceSigners(dir));
   const ai = new AiGateway(db);
-  const flows: FlowDeps = { store, gov, evidence, queue: null, publicUrl: 'http://lexc.test' };
+  const recorder = new EvidenceRecorder(evidence, store);
+  const keysFor = (id: string) => evidence.publicKeys(id, [], new Map());
+  const flows: FlowDeps = { store, gov, evidence: recorder, queue: null, publicUrl: 'http://lexc.test' };
   fs.mkdirSync(path.join(reposRoot, 'finhealth'), { recursive: true });
   for (const [p, f] of Object.entries(INITIAL_REPO_FILES)) {
     fs.mkdirSync(path.dirname(path.join(reposRoot, 'finhealth', p)), { recursive: true });
@@ -83,9 +87,10 @@ beforeAll(async () => {
   }
   const config = resolveServerSecurityConfig({ LEXCOMPILER_SIGN_IN: 'password', LEXCOMPILER_API_TOKEN: API_TOKEN });
   const app = express();
+  app.use(createPublicEvidenceRouter({ store, log: evidence, keysFor, publicUrl: 'http://lexc.test' }));
+  app.use('/mcp', createWorkspaceMcpRouter({ store, security: config, readRepoFiles: async () => [], flows }));
   app.use(express.json());
-  app.use(createPublicRoutes({ store, gov, evidence }));
-  app.post('/mcp', createWorkspaceMcpHandler({ store, gov, flows, getApp: () => null, allowedOrigins: config.allowedOrigins }));
+  app.use(createPublicRoutes({ store, log: evidence, keysFor, publicUrl: 'http://lexc.test' }));
   app.use('/api', createApiGuard(config, createAuthenticator(null, API_TOKEN, databaseSessionStore(store))));
   app.use(
     '/api',
@@ -93,9 +98,11 @@ beforeAll(async () => {
       reposRoot,
       ai,
       passwordSignIn: true,
-      onRuleDecided: (input) => ruleDecided(flows, input),
-      onScanCompleted: (scan, findings) => recordScanEvidence(flows, scan, findings),
-      extra: (r, h) => mountWorkspaceRoutes(r, h, { store, gov, evidence, ai, flows, publicUrl: 'http://lexc.test', passwordSignIn: true, secureCookies: false }),
+      evidence: recorder,
+      flows,
+      keysFor,
+      publicUrl: 'http://lexc.test',
+      extra: (r, h) => mountWorkspaceRoutes(r, h, { store, gov, ai, passwordSignIn: true, secureCookies: false }),
     })
   );
   server = app.listen(0, '127.0.0.1');
@@ -105,6 +112,7 @@ beforeAll(async () => {
 
 afterAll(() => {
   server?.close();
+  store?.db.close();
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -178,14 +186,14 @@ describe('demo cycle: Legal approves, an assistant checks, Legal waives, an audi
     expect(created.status).toBe(201);
     const token = created.body.token as string;
     expect(token).toMatch(/^lexc_pat_/);
-    expect((await api(`/workspaces/${ws}/tokens`, 'tanvir')).body[0]).not.toHaveProperty('token');
+    expect((await api(`/workspaces/${ws}/tokens`, 'tanvir')).body.tokens[0]).not.toHaveProperty('token');
     expect((await mcp('lexc_pat_nope', 'tools/list')).status).toBe(401);
     expect((await mcp(token, 'tools/list', {}, { Origin: 'https://evil.example' })).status).toBe(403);
-    expect((await mcp(token, 'tools/list', {}, { 'MCP-Protocol-Version': '2026-07-28' })).body.error).toMatchObject({ message: 'Unsupported protocol version', data: { supported: ['2025-06-18', '2025-03-26'] } });
+    expect((await mcp(token, 'tools/list', {}, { 'MCP-Protocol-Version': '2099-01-01' })).body.error).toMatchObject({ message: 'Unsupported protocol version', data: { supported: [STATELESS_VERSION, '2025-06-18', '2025-03-26'] } });
     const init = await mcp(token, 'initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'Kiro', version: '1' } });
     expect(init.body.result).toMatchObject({ protocolVersion: '2025-06-18', serverInfo: { name: 'lexcompiler' } });
     expect(init.body.result.instructions.slice(0, 512)).toContain('check_changes');
-    expect((await mcp(token, 'tools/list')).body.result.tools.map((t: { name: string }) => t.name)).toEqual(['list_rules', 'check_changes', 'explain_finding', 'request_exception', 'search_obligations']);
+    expect((await mcp(token, 'tools/list')).body.result.tools.map((t: { name: string }) => t.name)).toEqual(['list_rules', 'check_changes', 'explain_finding', 'suggest_fix', 'request_exception', 'search_obligations']);
 
     const rules = await tool(token, 'list_rules', {});
     expect(rules.content[0].text).toContain('R-1 v1');
@@ -211,7 +219,7 @@ describe('demo cycle: Legal approves, an assistant checks, Legal waives, an audi
 
     // Only Legal decides; an approval needs a future expiry.
     const [request] = (await api(`/workspaces/${ws}/exceptions?status=requested`, 'nusrat')).body;
-    expect(request).toMatchObject({ ruleKey: 'R-1', requesterLabel: 'Tanvir Rahman via Kiro', requestedFrom: 'mcp' });
+    expect(request).toMatchObject({ ruleKey: 'R-1', requesterLabel: 'Tanvir Rahman via Kiro', requestedFrom: 'assistant' });
     expect((await api(`/workspaces/${ws}/exceptions/${request.id}/approve`, 'tanvir', { body: { expiresAt: '2099-01-01' } })).status).toBe(403);
     expect((await api(`/workspaces/${ws}/exceptions/${request.id}/approve`, 'nusrat', { body: { expiresAt: '2001-01-01' } })).status).toBe(400);
     const until = new Date(Date.now() + 30 * 86_400_000).toISOString();

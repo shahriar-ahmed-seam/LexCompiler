@@ -313,7 +313,8 @@ function editsForTargets(
   if (needsConsentHelper && !/def require_consent\(/.test(content)) {
     edits.push(pythonHelperEdit(content, REQUIRE_CONSENT_HELPER, 'add fail-closed require_consent helper'));
   }
-  if (needsRedactHelper && !/def redact_pii\(/.test(content)) {
+  // A file that already defines or imports redact_pii (for example from a shared privacy module) uses it.
+  if (needsRedactHelper && !/def redact_pii\(/.test(content) && !/^[ \t]*from[ \t]+[\w.]+[ \t]+import[^\n#]*\bredact_pii\b/m.test(content)) {
     edits.push(pythonHelperEdit(content, REDACT_PII_HELPER, 'add keyed redact_pii helper'));
   }
   return edits;

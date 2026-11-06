@@ -1,5 +1,5 @@
 import type { JobHandler, JobQueue } from '../jobs/queue.js';
-import type { ProductStore } from '../product/store.js';
+import type { ProductStore, RuleScope } from '../product/store.js';
 import type { GitHubApp } from './client.js';
 import { enqueueScan } from './webhooks.js';
 
@@ -14,17 +14,11 @@ export function createGovernanceJobHandlers(deps: { store: ProductStore; getApp:
     return a;
   };
   return {
-    /** A comment on a pull request (exception requested, approved or rejected). */
-    pr_comment: async (p) => {
-      const { installationId, repoFullName, prNumber, body } = p as { installationId: number; repoFullName: string; prNumber: number; body: string };
-      await app().request(installationId, 'POST', `/repos/${repoFullName}/issues/${prNumber}/comments`, { body: String(body).slice(0, 60000) });
-    },
-    /** Rules changed: re-check each repository's default branch and every open pull request. */
+    /** Rules changed: re-check every open pull request of the repositories in the rule's scope (the default branch is rescanned by the approval itself). */
     rules_changed: async (p) => {
-      const { workspaceId, stamp } = p as { workspaceId: string; stamp: number };
-      for (const repo of deps.store.listRepos(workspaceId)) {
+      const { workspaceId, stamp, scope } = p as { workspaceId: string; stamp: number; scope?: RuleScope };
+      for (const repo of scope ? deps.store.reposInScope(workspaceId, scope) : deps.store.listRepos(workspaceId)) {
         if (repo.source !== 'github' || !repo.installationId || !repo.githubRepoId) continue;
-        enqueueScan({ queue: deps.queue() }, { githubRepoId: repo.githubRepoId, installationId: repo.installationId, kind: 'push', trigger: 'manual', ref: repo.defaultBranch }, `rules:${stamp}:${repo.id}`);
         const pulls = await app().request<Array<{ number: number; draft?: boolean; head?: { sha?: string }; base?: { sha?: string } }>>(
           repo.installationId,
           'GET',

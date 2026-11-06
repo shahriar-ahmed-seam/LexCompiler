@@ -91,12 +91,49 @@ export async function scanFiles(files: TargetRepoFile[], rules: RuleInEffect[]):
   };
 }
 
+/**
+ * Scans with each rule limited to its path globs (product guide, Phase 6, scope by path): a rule
+ * is proven only against facts from the files in its scope, so code outside a counterparty's
+ * paths can neither fail nor satisfy that counterparty's rule. Rules with the same globs are
+ * proven together. `globs` maps a rule key to its globs; a missing key means the whole repository.
+ */
+export async function scanFilesScoped(files: TargetRepoFile[], rules: RuleInEffect[], globs: Map<string, string[]>): Promise<FileScanResult> {
+  const groups = new Map<string, { globs: string[]; rules: RuleInEffect[] }>();
+  for (const r of rules) {
+    const g = [...new Set(globs.get(r.ruleKey) ?? ['**'])].sort();
+    const key = g.join('\n');
+    const group = groups.get(key) ?? { globs: g, rules: [] };
+    group.rules.push(r);
+    groups.set(key, group);
+  }
+  const whole = groups.get('**');
+  // The facts of the whole repository are kept with the scan (impact previews read them).
+  const results = await Promise.all(
+    [...groups.values()].map(async (group) => {
+      const subset = group.globs.includes('**') ? files : files.filter((f) => group.globs.some((g) => globMatch(g, f.path)));
+      const result = await scanFiles(subset, group.rules);
+      return { ...result, findings: result.findings.filter((f) => group.globs.some((g) => globMatch(g, f.filePath))) };
+    })
+  );
+  const facts = whole ? results[[...groups.keys()].indexOf('**')].facts : (await scanFiles(files, [])).facts;
+  const findings = results.flatMap((r) => r.findings);
+  findings.sort((a, b) => a.filePath.localeCompare(b.filePath) || a.startLine - b.startLine || a.ruleKey.localeCompare(b.ruleKey));
+  return {
+    findings,
+    undecidedRuleKeys: [...new Set(results.flatMap((r) => r.undecidedRuleKeys))],
+    proofs: results.flatMap((r) => r.proofs),
+    filesScanned: files.length,
+    facts,
+  };
+}
+
 /** An approved exception that waives findings until it expires. */
 export interface ActiveException {
   id: string;
   ruleId: string;
   fingerprint: string | null;
   pathGlob: string | null;
+  expiresAt?: string | null;
 }
 
 /**

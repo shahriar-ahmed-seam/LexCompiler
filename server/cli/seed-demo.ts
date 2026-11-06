@@ -24,6 +24,8 @@ import { hashPassword } from '../auth/passwords.js';
 import { getInitialClauses } from '../compiler/legalCompiler.js';
 import { closeDb, dataDir, getDb } from '../db/index.js';
 import { EvidenceLog } from '../evidence/log.js';
+import { EvidenceRecorder } from '../evidence/records.js';
+import { workspaceSigners } from '../evidence/signer.js';
 import { JobQueue } from '../jobs/queue.js';
 import { compileClauseSync } from '../product/clauses.js';
 import { rulesChanged, type FlowDeps } from '../product/flows.js';
@@ -61,10 +63,10 @@ async function main() {
   const db = getDb();
   const store = new ProductStore(db);
   const gov = new GovernanceStore(db);
-  const evidence = new EvidenceLog(db);
+  const evidence = new EvidenceRecorder(new EvidenceLog(db, workspaceSigners(dataDir())), store);
   // Only to queue work for the running server, which polls the jobs table.
   const noop = async () => undefined;
-  const queue = new JobQueue(db, { scan: noop, rules_changed: noop, pr_comment: noop });
+  const queue = new JobQueue(db, { scan: noop, github_comment: noop, pr_comment: noop, rules_changed: noop });
   const flows: FlowDeps = { store, gov, evidence, queue, publicUrl: process.env.LEXCOMPILER_PUBLIC_URL || 'http://localhost:3001' };
   const seedUser = store.upsertUser({ sub: 'system:seed', name: 'Demo seed' });
 
@@ -151,19 +153,9 @@ async function main() {
       for (const builtin of builtins) {
         const key = store.nextRuleKey(workspace.id);
         const clause = compileClauseSync({ text: builtin.rawLegalText, key, title: builtin.title, citation: builtin.citation, category: builtin.category, frameworkId: builtin.frameworkId });
-        const { rule, version } = store.createRuleDraft({ workspaceId: workspace.id, title: builtin.title, sourceText: builtin.rawLegalText, clause: { ...clause, illustrative: true }, createdBy: approver });
+        const { version } = store.createRuleDraft({ workspaceId: workspace.id, title: builtin.title, sourceText: builtin.rawLegalText, clause: { ...clause, illustrative: true }, createdBy: approver });
         const approved = store.approveRuleVersion(workspace.id, version.id, approver, { note: 'Illustrative clause from the LexCompiler library, approved for the demo.' });
-        evidence.append(workspace.id, 'rule.approved', {
-          rule: key,
-          title: rule.title,
-          version: approved.version,
-          clause_sha256: approved.clauseSha256,
-          category: approved.clause.category,
-          effective_from: approved.effectiveFrom,
-          source_text: approved.sourceText,
-          decided_by: people.has('legal') ? 'Nusrat Jahan' : 'the demo seed',
-          note: approved.decisionNote,
-        });
+        await evidence.ruleApproved(workspace.id, approved);
         console.log(`  ${key} approved: ${builtin.title}`);
       }
       if (flag('approve-all-but-dpa')) console.log('  the DPA retention clause (72 hours, tenant keys) is left for Legal to approve in the demo');

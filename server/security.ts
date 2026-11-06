@@ -73,6 +73,10 @@ export function resolveServerSecurityConfig(env: NodeJS.ProcessEnv = process.env
  * rewrite target-repo files and trigger Git commits.
  */
 export function assertSafeBindConfig(config: ServerSecurityConfig): void {
+  // The runtime sandbox executes repository code; never on a server others can reach.
+  if (!isLoopbackHostname(config.host) && config.runtimeSandboxEnabled) {
+    throw new Error(`Refusing to listen on non-loopback host "${config.host}" with LEXCOMPILER_ENABLE_RUNTIME_SANDBOX=1. Turn the runtime sandbox off on a public server.`);
+  }
   if (!isLoopbackHostname(config.host) && !config.apiToken && !config.oidcEnabled && !config.passwordSignIn) {
     throw new Error(
       `Refusing to listen on non-loopback host "${config.host}" without LEXCOMPILER_API_TOKEN or OIDC. ` +
@@ -87,6 +91,62 @@ function hostnameFromHostHeader(hostHeader: string | undefined): string {
     return hostHeader.slice(0, hostHeader.indexOf(']') + 1).toLowerCase();
   }
   return hostHeader.split(':')[0].toLowerCase();
+}
+
+/**
+ * Per-client rate limit (product guide, Phase 7): at most `max` requests per `windowMs` for each
+ * key (the client IP by default; set `trust proxy` behind a reverse proxy so req.ip is the
+ * client's). Over the limit: 429 with Retry-After.
+ */
+export function rateLimit(options: { windowMs: number; max: number; name: string; key?: (req: Request) => string }) {
+  const hits = new Map<string, number[]>();
+  let sweep = Date.now();
+  return (req: Request, res: Response, next: NextFunction): void => {
+    const now = Date.now();
+    // Drop idle clients now and then, so the map can't grow without bound.
+    if (now - sweep > options.windowMs) {
+      for (const [k, times] of hits) if (times[times.length - 1] <= now - options.windowMs) hits.delete(k);
+      sweep = now;
+    }
+    const key = options.key ? options.key(req) : req.ip || req.socket.remoteAddress || 'unknown';
+    const recent = (hits.get(key) ?? []).filter((t) => now - t < options.windowMs);
+    if (recent.length >= options.max) {
+      hits.set(key, recent);
+      res.setHeader('Retry-After', String(Math.max(1, Math.ceil((options.windowMs - (now - recent[0])) / 1000))));
+      res.status(429).json({ error: `Too many requests (${options.name}): at most ${options.max} per ${Math.round(options.windowMs / 1000)} seconds.` });
+      return;
+    }
+    recent.push(now);
+    hits.set(key, recent);
+    next();
+  };
+}
+
+/** The `trust proxy` setting from LEXCOMPILER_TRUST_PROXY: a hop count, "true", or a list such as "loopback". */
+export function trustProxySetting(value: string | undefined): boolean | number | string | undefined {
+  const v = value?.trim();
+  if (!v || v === 'false' || v === '0') return undefined;
+  if (v === 'true') return true;
+  if (/^\d+$/.test(v)) return Number(v);
+  return v;
+}
+
+/**
+ * HTTPS only (Phase 7): when the public URL is https and requests come through a trusted proxy,
+ * plain-HTTP requests are redirected and responses carry HSTS. /api/health stays reachable over
+ * HTTP for the container's health check.
+ */
+export function httpsOnly(publicUrl: string) {
+  const enabled = publicUrl.startsWith('https://');
+  return (req: Request, res: Response, next: NextFunction): void => {
+    if (!enabled || req.path === '/api/health') return next();
+    if (!req.secure) {
+      res.redirect(308, `${publicUrl}${req.originalUrl}`);
+      return;
+    }
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+    next();
+  };
 }
 
 export function tokensMatch(expected: string, provided: string): boolean {

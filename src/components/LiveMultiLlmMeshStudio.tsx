@@ -371,6 +371,26 @@ export const LiveMultiLlmMeshStudio: React.FC<LiveMultiLlmMeshStudioProps> = ({
                   {pipelineResult.generalCounselLlm.responseText}
                 </p>
               </div>
+
+              {/* Pass 4: Local reasoning model as an advisory critic (Z3 decides) */}
+              {pipelineResult.reasoningCriticLlm && (
+                <div className="p-3.5 rounded-xl bg-[#06070B] border border-white/[0.07] space-y-1.5">
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-mono">
+                    <span className="text-sky-300 font-semibold">
+                      Pass 4 · Reasoning critic (advisory; Z3 decides): {pipelineResult.reasoningCriticLlm.model} (
+                      {pipelineResult.reasoningCriticLlm.provider})
+                    </span>
+                    <span className="px-2 py-0.5 rounded bg-sky-500/15 text-sky-300 text-[10.5px]">
+                      {pipelineResult.reasoningCriticLlm.tokensPerSecond} tok/s ·{' '}
+                      {pipelineResult.reasoningCriticLlm.completionTokens} tokens (
+                      {pipelineResult.reasoningCriticLlm.totalDurationMs} ms)
+                    </span>
+                  </div>
+                  <p className="text-xs text-zinc-200 leading-relaxed whitespace-pre-wrap">
+                    {pipelineResult.reasoningCriticLlm.responseText}
+                  </p>
+                </div>
+              )}
             </div>
           )}
         </div>

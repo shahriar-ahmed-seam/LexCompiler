@@ -1,0 +1,206 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1600" viewBox="0 0 1920 1600">
+<defs><marker id="ah-94A3B8" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#94A3B8"/></marker><marker id="ah-0369A1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0369A1"/></marker><marker id="ah-047857" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#047857"/></marker><marker id="ah-B45309" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#B45309"/></marker><marker id="ah-6D28D9" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6D28D9"/></marker><marker id="ah-B91C1C" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#B91C1C"/></marker><marker id="ah-1E293B" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1E293B"/></marker></defs>
+<rect x="0" y="0" width="1920" height="1600" rx="0" fill="#F7F8FB" stroke="none" stroke-width="0"/>
+<text x="60" y="78" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="44" font-weight="800" fill="#0F172A" text-anchor="start"><tspan x="60" dy="0">LexCompiler</tspan></text>
+<text x="60" y="116" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="20" font-weight="400" fill="#475569" text-anchor="start"><tspan x="60" dy="0">Turns laws and contracts into machine-checkable rules, and proves on every pull request that the code still obeys them.</tspan></text>
+<text x="1860" y="70" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="15" font-weight="400" fill="#475569" text-anchor="end"><tspan x="1860" dy="0">International AI Builders Congress 2026</tspan></text>
+<text x="1860" y="94" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="15" font-weight="600" fill="#0F172A" text-anchor="end"><tspan x="1860" dy="0">Shahriar Ahmed Seam · Shakil Ahmed</tspan></text>
+<rect x="60" y="150" width="587" height="170" rx="12" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1.5"/>
+<rect x="60" y="150" width="8" height="170" rx="4" fill="#B91C1C" stroke="none" stroke-width="0"/>
+<text x="90" y="188" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="15" font-weight="800" fill="#B91C1C" text-anchor="start"><tspan x="90" dy="0">THE PROBLEM</tspan></text>
+<text x="90" y="220" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="16" font-weight="400" fill="#0F172A" text-anchor="start"><tspan x="90" dy="0">Laws change: GDPR, the EU AI Act, HIPAA, Bangladesh Bank rules.</tspan><tspan x="90" dy="23.2">Code changes every day. Compliance is checked by hand,</tspan><tspan x="90" dy="23.2">often months later, after the violation has shipped.</tspan><tspan x="90" dy="23.2">Fines reach 4% of global turnover (GDPR), 7% (EU AI Act).</tspan></text>
+<rect x="667" y="150" width="587" height="170" rx="12" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1.5"/>
+<rect x="667" y="150" width="8" height="170" rx="4" fill="#0369A1" stroke="none" stroke-width="0"/>
+<text x="697" y="188" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="15" font-weight="800" fill="#0369A1" text-anchor="start"><tspan x="697" dy="0">WHAT LEXCOMPILER DOES</tspan></text>
+<text x="697" y="220" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="16" font-weight="400" fill="#0F172A" text-anchor="start"><tspan x="697" dy="0">Legal approves each rule as a plain-language card.</tspan><tspan x="697" dy="23.2">LexCompiler compiles it into formal logic and checks every</tspan><tspan x="697" dy="23.2">code change with the Z3 theorem prover, before merge,</tspan><tspan x="697" dy="23.2">in English and বাংলা.</tspan></text>
+<rect x="1274" y="150" width="587" height="170" rx="12" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1.5"/>
+<rect x="1274" y="150" width="8" height="170" rx="4" fill="#047857" stroke="none" stroke-width="0"/>
+<text x="1304" y="188" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="15" font-weight="800" fill="#047857" text-anchor="start"><tspan x="1304" dy="0">WHY IT MATTERS</tspan></text>
+<text x="1304" y="220" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="16" font-weight="400" fill="#0F172A" text-anchor="start"><tspan x="1304" dy="0">Proof, not opinion: every failure has a counterexample.</tspan><tspan x="1304" dy="23.2">Seconds, not months: a pull request check took 5 s;</tspan><tspan x="1304" dy="23.2">a rescan after Legal approved a rule took 4 s.</tspan><tspan x="1304" dy="23.2">Audit-ready: every decision is signed and hash-chained.</tspan></text>
+<text x="60" y="360" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="15" font-weight="800" fill="#1E293B" text-anchor="start"><tspan x="60" dy="0">HOW IT WORKS: FROM A NEW LAW TO SIGNED EVIDENCE</tspan></text>
+<rect x="60" y="380" width="1800" height="118" rx="12" fill="#FFFBEB" stroke="none" stroke-width="0"/>
+<text x="80" y="437" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="18" font-weight="800" fill="#B45309" text-anchor="start"><tspan x="80" dy="0">Regulators</tspan></text>
+<text x="80" y="459" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="13" font-weight="400" fill="#475569" text-anchor="start"><tspan x="80" dy="0">and contracts</tspan></text>
+<rect x="60" y="506" width="1800" height="118" rx="12" fill="#F5F3FF" stroke="none" stroke-width="0"/>
+<text x="80" y="563" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="18" font-weight="800" fill="#6D28D9" text-anchor="start"><tspan x="80" dy="0">Legal team</tspan></text>
+<text x="80" y="585" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="13" font-weight="400" fill="#475569" text-anchor="start"><tspan x="80" dy="0">lawyers, compliance</tspan></text>
+<rect x="60" y="632" width="1800" height="118" rx="12" fill="#F0F9FF" stroke="none" stroke-width="0"/>
+<text x="80" y="689" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="18" font-weight="800" fill="#0369A1" text-anchor="start"><tspan x="80" dy="0">LexCompiler</tspan></text>
+<text x="80" y="711" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="13" font-weight="400" fill="#475569" text-anchor="start"><tspan x="80" dy="0">agents + Z3 prover</tspan></text>
+<rect x="60" y="758" width="1800" height="118" rx="12" fill="#ECFDF5" stroke="none" stroke-width="0"/>
+<text x="80" y="815" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="18" font-weight="800" fill="#047857" text-anchor="start"><tspan x="80" dy="0">Engineers</tspan></text>
+<text x="80" y="837" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="13" font-weight="400" fill="#475569" text-anchor="start"><tspan x="80" dy="0">on GitHub</tspan></text>
+<path d="M428,439 C435.57142857142856,439 435.57142857142856,691 440.1428571428571,691" fill="none" stroke="#1E293B" stroke-width="2" marker-end="url(#ah-1E293B)"/>
+<path d="M631.1428571428571,691 C638.7142857142857,691 638.7142857142857,565 643.2857142857142,565" fill="none" stroke="#1E293B" stroke-width="2" marker-end="url(#ah-1E293B)"/>
+<path d="M834.2857142857142,565 C841.8571428571429,565 841.8571428571429,691 846.4285714285714,691" fill="none" stroke="#1E293B" stroke-width="2" marker-end="url(#ah-1E293B)"/>
+<path d="M1037.4285714285716,691 C1045,691 1045,817 1049.5714285714284,817" fill="none" stroke="#1E293B" stroke-width="2" marker-end="url(#ah-1E293B)"/>
+<path d="M1240.5714285714284,817 C1248.142857142857,817 1248.142857142857,691 1252.7142857142858,691" fill="none" stroke="#1E293B" stroke-width="2" marker-end="url(#ah-1E293B)"/>
+<path d="M1443.7142857142858,691 C1451.2857142857142,691 1451.2857142857142,817 1455.857142857143,817" fill="none" stroke="#1E293B" stroke-width="2" marker-end="url(#ah-1E293B)"/>
+<path d="M1646.857142857143,817 C1654.4285714285716,817 1654.4285714285716,565 1659,565" fill="none" stroke="#1E293B" stroke-width="2" marker-end="url(#ah-1E293B)"/>
+<rect x="240" y="393" width="188" height="92" rx="12" fill="#FFFFFF" stroke="#B45309" stroke-width="2"/>
+<circle cx="262" cy="417" r="15" fill="#B45309"/>
+<text x="262" y="422" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="14" font-weight="700" fill="#FFFFFF" text-anchor="middle"><tspan x="262" dy="0">1</tspan></text>
+<text x="284" y="423" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="15" font-weight="700" fill="#0F172A" text-anchor="start"><tspan x="284" dy="0">A law changes</tspan></text>
+<text x="254" y="449" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="12.5" font-weight="400" fill="#475569" text-anchor="start"><tspan x="254" dy="0">EUR-Lex, U.S. Federal</tspan><tspan x="254" dy="16.875">Register, contracts (PDF)</tspan></text>
+<rect x="443.1428571428571" y="645" width="188" height="92" rx="12" fill="#FFFFFF" stroke="#0369A1" stroke-width="2"/>
+<circle cx="465.1428571428571" cy="669" r="15" fill="#0369A1"/>
+<text x="465.1428571428571" y="674" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="14" font-weight="700" fill="#FFFFFF" text-anchor="middle"><tspan x="465.1428571428571" dy="0">2</tspan></text>
+<text x="487.1428571428571" y="675" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="15" font-weight="700" fill="#0F172A" text-anchor="start"><tspan x="487.1428571428571" dy="0">Spot what it affects</tspan></text>
+<text x="457.1428571428571" y="701" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="12.5" font-weight="400" fill="#475569" text-anchor="start"><tspan x="457.1428571428571" dy="0">Horizon scanner matches</tspan><tspan x="457.1428571428571" dy="16.875">it to the rules in force</tspan></text>
+<rect x="646.2857142857142" y="519" width="188" height="92" rx="12" fill="#FFFFFF" stroke="#6D28D9" stroke-width="2"/>
+<circle cx="668.2857142857142" cy="543" r="15" fill="#6D28D9"/>
+<text x="668.2857142857142" y="548" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="14" font-weight="700" fill="#FFFFFF" text-anchor="middle"><tspan x="668.2857142857142" dy="0">3</tspan></text>
+<text x="690.2857142857142" y="549" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="15" font-weight="700" fill="#0F172A" text-anchor="start"><tspan x="690.2857142857142" dy="0">Approve a rule card</tspan></text>
+<text x="660.2857142857142" y="575" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="12.5" font-weight="400" fill="#475569" text-anchor="start"><tspan x="660.2857142857142" dy="0">Plain-language card,</tspan><tspan x="660.2857142857142" dy="16.875">values and effective date</tspan></text>
+<rect x="849.4285714285714" y="645" width="188" height="92" rx="12" fill="#FFFFFF" stroke="#0369A1" stroke-width="2"/>
+<circle cx="871.4285714285714" cy="669" r="15" fill="#0369A1"/>
+<text x="871.4285714285714" y="674" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="14" font-weight="700" fill="#FFFFFF" text-anchor="middle"><tspan x="871.4285714285714" dy="0">4</tspan></text>
+<text x="893.4285714285714" y="675" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="15" font-weight="700" fill="#0F172A" text-anchor="start"><tspan x="893.4285714285714" dy="0">Compile to logic</tspan></text>
+<text x="863.4285714285714" y="701" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="12.5" font-weight="400" fill="#475569" text-anchor="start"><tspan x="863.4285714285714" dy="0">Obligation / prohibition</tspan><tspan x="863.4285714285714" dy="16.875">→ SMT-LIB2 + Rego</tspan></text>
+<rect x="1052.5714285714284" y="771" width="188" height="92" rx="12" fill="#FFFFFF" stroke="#047857" stroke-width="2"/>
+<circle cx="1074.5714285714284" cy="795" r="15" fill="#047857"/>
+<text x="1074.5714285714284" y="800" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="14" font-weight="700" fill="#FFFFFF" text-anchor="middle"><tspan x="1074.5714285714284" dy="0">5</tspan></text>
+<text x="1096.5714285714284" y="801" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="15" font-weight="700" fill="#0F172A" text-anchor="start"><tspan x="1096.5714285714284" dy="0">Open a pull request</tspan></text>
+<text x="1066.5714285714284" y="827" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="12.5" font-weight="400" fill="#475569" text-anchor="start"><tspan x="1066.5714285714284" dy="0">GitHub sends a signed</tspan><tspan x="1066.5714285714284" dy="16.875">webhook to LexCompiler</tspan></text>
+<rect x="1255.7142857142858" y="645" width="188" height="92" rx="12" fill="#FFFFFF" stroke="#0369A1" stroke-width="2"/>
+<circle cx="1277.7142857142858" cy="669" r="15" fill="#0369A1"/>
+<text x="1277.7142857142858" y="674" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="14" font-weight="700" fill="#FFFFFF" text-anchor="middle"><tspan x="1277.7142857142858" dy="0">6</tspan></text>
+<text x="1299.7142857142858" y="675" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="15" font-weight="700" fill="#0F172A" text-anchor="start"><tspan x="1299.7142857142858" dy="0">Prove it</tspan></text>
+<text x="1269.7142857142858" y="701" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="12.5" font-weight="400" fill="#475569" text-anchor="start"><tspan x="1269.7142857142858" dy="0">Code → AST facts → Z3:</tspan><tspan x="1269.7142857142858" dy="16.875">proof, or counterexample</tspan></text>
+<rect x="1458.857142857143" y="771" width="188" height="92" rx="12" fill="#FFFFFF" stroke="#047857" stroke-width="2"/>
+<circle cx="1480.857142857143" cy="795" r="15" fill="#047857"/>
+<text x="1480.857142857143" y="800" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="14" font-weight="700" fill="#FFFFFF" text-anchor="middle"><tspan x="1480.857142857143" dy="0">7</tspan></text>
+<text x="1502.857142857143" y="801" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="15" font-weight="700" fill="#0F172A" text-anchor="start"><tspan x="1502.857142857143" dy="0">Fix before merge</tspan></text>
+<text x="1472.857142857143" y="827" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="12.5" font-weight="400" fill="#475569" text-anchor="start"><tspan x="1472.857142857143" dy="0">Failing check, exact fix,</tspan><tspan x="1472.857142857143" dy="16.875">AI explanation, fix PR</tspan></text>
+<rect x="1662" y="519" width="188" height="92" rx="12" fill="#FFFFFF" stroke="#6D28D9" stroke-width="2"/>
+<circle cx="1684" cy="543" r="15" fill="#6D28D9"/>
+<text x="1684" y="548" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="14" font-weight="700" fill="#FFFFFF" text-anchor="middle"><tspan x="1684" dy="0">8</tspan></text>
+<text x="1706" y="549" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="15" font-weight="700" fill="#0F172A" text-anchor="start"><tspan x="1706" dy="0">Evidence for audit</tspan></text>
+<text x="1676" y="575" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="12.5" font-weight="400" fill="#475569" text-anchor="start"><tspan x="1676" dy="0">Signed, hash-chained log;</tspan><tspan x="1676" dy="16.875">read-only auditor link</tspan></text>
+<text x="240" y="902" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="13.5" font-weight="400" fill="#475569" text-anchor="start"><tspan x="240" dy="0">Step 3 also rescans the main branch at once. A version approved for a later date shows as "Coming up" on pull requests before it fails anything. If a patch can't be proven, nothing is merged: the fix agent only suggests.</tspan></text>
+<text x="60" y="944" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="15" font-weight="800" fill="#1E293B" text-anchor="start"><tspan x="60" dy="0">ARCHITECTURE: WHAT RUNS WHERE, AND HOW THE PARTS TALK</tspan></text>
+<rect x="60" y="962" width="1250" height="548" rx="12" fill="#FFFFFF" stroke="#1E293B" stroke-width="2" stroke-dasharray="8 6"/>
+<text x="80" y="992" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="15" font-weight="700" fill="#1E293B" text-anchor="start"><tspan x="80" dy="0">Runs on your own machine or VPS  ·  code and keys stay inside</tspan></text>
+<text x="1290" y="992" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="13" font-weight="400" fill="#475569" text-anchor="end"><tspan x="1290" dy="0">tested on a laptop: Windows 11, RTX 4050 6 GB</tspan></text>
+<rect x="80" y="1010" width="1210" height="238" rx="12" fill="#F8FAFC" stroke="#0369A1" stroke-width="2"/>
+<text x="98" y="1038" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="17" font-weight="800" fill="#0369A1" text-anchor="start"><tspan x="98" dy="0">LexCompiler server</tspan></text>
+<text x="276" y="1038" font-family="'JetBrains Mono', Consolas, monospace" font-size="13" font-weight="400" fill="#475569" text-anchor="start"><tspan x="276" dy="0">Node 24 · Express · TypeScript · :3002</tspan></text>
+<rect x="98" y="1054" width="383.3333333333333" height="58" rx="8" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1.5"/>
+<text x="110" y="1075" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="14" font-weight="700" fill="#0F172A" text-anchor="start"><tspan x="110" dy="0">Legal workspace</tspan></text>
+<text x="110" y="1092" font-family="'JetBrains Mono', Consolas, monospace" font-size="11.5" font-weight="400" fill="#475569" text-anchor="start"><tspan x="110" dy="0">/legal · rule cards, approvals</tspan></text>
+<text x="110" y="1106" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="11.5" font-weight="400" fill="#475569" text-anchor="start"><tspan x="110" dy="0">OIDC roles: owner, legal, engineer</tspan></text>
+<rect x="493.3333333333333" y="1054" width="383.3333333333333" height="58" rx="8" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1.5"/>
+<text x="505.3333333333333" y="1075" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="14" font-weight="700" fill="#0F172A" text-anchor="start"><tspan x="505.3333333333333" dy="0">GitHub App receiver</tspan></text>
+<text x="505.3333333333333" y="1092" font-family="'JetBrains Mono', Consolas, monospace" font-size="11.5" font-weight="400" fill="#475569" text-anchor="start"><tspan x="505.3333333333333" dy="0">/api/github/webhooks</tspan></text>
+<text x="505.3333333333333" y="1106" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="11.5" font-weight="400" fill="#475569" text-anchor="start"><tspan x="505.3333333333333" dy="0">HMAC-SHA256 check · dedupe</tspan></text>
+<rect x="888.6666666666666" y="1054" width="383.3333333333333" height="58" rx="8" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1.5"/>
+<text x="900.6666666666666" y="1075" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="14" font-weight="700" fill="#0F172A" text-anchor="start"><tspan x="900.6666666666666" dy="0">Job queue</tspan></text>
+<text x="900.6666666666666" y="1092" font-family="'JetBrains Mono', Consolas, monospace" font-size="11.5" font-weight="400" fill="#475569" text-anchor="start"><tspan x="900.6666666666666" dy="0">scans, nightly feed, retries</tspan></text>
+<text x="900.6666666666666" y="1106" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="11.5" font-weight="400" fill="#475569" text-anchor="start"><tspan x="900.6666666666666" dy="0">one scan per commit + rules</tspan></text>
+<rect x="98" y="1122" width="383.3333333333333" height="58" rx="8" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1.5"/>
+<text x="110" y="1143" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="14" font-weight="700" fill="#0F172A" text-anchor="start"><tspan x="110" dy="0">Rule compiler</tspan></text>
+<text x="110" y="1160" font-family="'JetBrains Mono', Consolas, monospace" font-size="11.5" font-weight="400" fill="#475569" text-anchor="start"><tspan x="110" dy="0">deontic O / F / P</tspan></text>
+<text x="110" y="1174" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="11.5" font-weight="400" fill="#475569" text-anchor="start"><tspan x="110" dy="0">→ SMT-LIB2 (QF_LIA) + Rego</tspan></text>
+<rect x="493.3333333333333" y="1122" width="383.3333333333333" height="58" rx="8" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1.5"/>
+<text x="505.3333333333333" y="1143" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="14" font-weight="700" fill="#0F172A" text-anchor="start"><tspan x="505.3333333333333" dy="0">Scanner + Z3 prover</tspan></text>
+<text x="505.3333333333333" y="1160" font-family="'JetBrains Mono', Consolas, monospace" font-size="11.5" font-weight="400" fill="#475569" text-anchor="start"><tspan x="505.3333333333333" dy="0">SQL · Python · TypeScript AST</tspan></text>
+<text x="505.3333333333333" y="1174" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="11.5" font-weight="400" fill="#475569" text-anchor="start"><tspan x="505.3333333333333" dy="0">proof, unsat core, counterexample</tspan></text>
+<rect x="888.6666666666666" y="1122" width="383.3333333333333" height="58" rx="8" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1.5"/>
+<text x="900.6666666666666" y="1143" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="14" font-weight="700" fill="#0F172A" text-anchor="start"><tspan x="900.6666666666666" dy="0">AI gateway</tspan></text>
+<text x="900.6666666666666" y="1160" font-family="'JetBrains Mono', Consolas, monospace" font-size="11.5" font-weight="400" fill="#475569" text-anchor="start"><tspan x="900.6666666666666" dy="0">off / local / cloud per workspace</tspan></text>
+<text x="900.6666666666666" y="1174" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="11.5" font-weight="400" fill="#475569" text-anchor="start"><tspan x="900.6666666666666" dy="0">daily budgets · every call logged</tspan></text>
+<rect x="98" y="1190" width="383.3333333333333" height="58" rx="8" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1.5"/>
+<text x="110" y="1211" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="14" font-weight="700" fill="#0F172A" text-anchor="start"><tspan x="110" dy="0">Contextual graph RAG</tspan></text>
+<text x="110" y="1228" font-family="'JetBrains Mono', Consolas, monospace" font-size="11.5" font-weight="400" fill="#475569" text-anchor="start"><tspan x="110" dy="0">contextual chunks · BM25 + vectors</tspan></text>
+<text x="110" y="1242" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="11.5" font-weight="400" fill="#475569" text-anchor="start"><tspan x="110" dy="0">rank fusion · 2-hop graph</tspan></text>
+<rect x="493.3333333333333" y="1190" width="383.3333333333333" height="58" rx="8" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1.5"/>
+<text x="505.3333333333333" y="1211" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="14" font-weight="700" fill="#0F172A" text-anchor="start"><tspan x="505.3333333333333" dy="0">MCP endpoint</tspan></text>
+<text x="505.3333333333333" y="1228" font-family="'JetBrains Mono', Consolas, monospace" font-size="11.5" font-weight="400" fill="#475569" text-anchor="start"><tspan x="505.3333333333333" dy="0">/mcp · stdio + streamable HTTP</tspan></text>
+<text x="505.3333333333333" y="1242" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="11.5" font-weight="400" fill="#475569" text-anchor="start"><tspan x="505.3333333333333" dy="0">OAuth for coding assistants</tspan></text>
+<rect x="888.6666666666666" y="1190" width="383.3333333333333" height="58" rx="8" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1.5"/>
+<text x="900.6666666666666" y="1211" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="14" font-weight="700" fill="#0F172A" text-anchor="start"><tspan x="900.6666666666666" dy="0">Evidence log</tspan></text>
+<text x="900.6666666666666" y="1228" font-family="'JetBrains Mono', Consolas, monospace" font-size="11.5" font-weight="400" fill="#475569" text-anchor="start"><tspan x="900.6666666666666" dy="0">append-only, hash-chained</tspan></text>
+<text x="900.6666666666666" y="1242" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="11.5" font-weight="400" fill="#475569" text-anchor="start"><tspan x="900.6666666666666" dy="0">Ed25519-signed, verifiable</tspan></text>
+<rect x="80" y="1262" width="1210" height="112" rx="12" fill="#FAF5FF" stroke="#6D28D9" stroke-width="2"/>
+<text x="98" y="1288" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="16" font-weight="800" fill="#6D28D9" text-anchor="start"><tspan x="98" dy="0">Six-agent crew</tspan></text>
+<text x="240" y="1288" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="12.5" font-weight="400" fill="#475569" text-anchor="start"><tspan x="240" dy="0">each agent calls only its own MCP server; what passes between them comes from tool results, never a model</tspan></text>
+<rect x="98" y="1302" width="187.33333333333334" height="60" rx="8" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1.5"/>
+<text x="108" y="1322" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="13.5" font-weight="700" fill="#0F172A" text-anchor="start"><tspan x="108" dy="0">1 Horizon scanner</tspan></text>
+<text x="108" y="1339" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="12" font-weight="400" fill="#6D28D9" text-anchor="start"><tspan x="108" dy="0">CrewAI</tspan></text>
+<text x="108" y="1354" font-family="'JetBrains Mono', Consolas, monospace" font-size="10.5" font-weight="400" fill="#475569" text-anchor="start"><tspan x="108" dy="0">lex-statute-ingest-mcp</tspan></text>
+<path d="M286.33333333333337,1332 L294.33333333333337,1332" fill="none" stroke="#6D28D9" stroke-width="1.5" marker-end="url(#ah-6D28D9)"/>
+<rect x="295.33333333333337" y="1302" width="187.33333333333334" height="60" rx="8" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1.5"/>
+<text x="305.33333333333337" y="1322" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="13.5" font-weight="700" fill="#0F172A" text-anchor="start"><tspan x="305.33333333333337" dy="0">2 Deontic extractor</tspan></text>
+<text x="305.33333333333337" y="1339" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="12" font-weight="400" fill="#6D28D9" text-anchor="start"><tspan x="305.33333333333337" dy="0">DSPy</tspan></text>
+<text x="305.33333333333337" y="1354" font-family="'JetBrains Mono', Consolas, monospace" font-size="10.5" font-weight="400" fill="#475569" text-anchor="start"><tspan x="305.33333333333337" dy="0">lex-deontic-compiler-mcp</tspan></text>
+<path d="M483.66666666666674,1332 L491.66666666666674,1332" fill="none" stroke="#6D28D9" stroke-width="1.5" marker-end="url(#ah-6D28D9)"/>
+<rect x="492.6666666666667" y="1302" width="187.33333333333334" height="60" rx="8" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1.5"/>
+<text x="502.6666666666667" y="1322" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="13.5" font-weight="700" fill="#0F172A" text-anchor="start"><tspan x="502.6666666666667" dy="0">3 AST mapper</tspan></text>
+<text x="502.6666666666667" y="1339" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="12" font-weight="400" fill="#6D28D9" text-anchor="start"><tspan x="502.6666666666667" dy="0">Hermes · Ollama</tspan></text>
+<text x="502.6666666666667" y="1354" font-family="'JetBrains Mono', Consolas, monospace" font-size="10.5" font-weight="400" fill="#475569" text-anchor="start"><tspan x="502.6666666666667" dy="0">lex-polyglot-ast-mcp</tspan></text>
+<path d="M681,1332 L689,1332" fill="none" stroke="#6D28D9" stroke-width="1.5" marker-end="url(#ah-6D28D9)"/>
+<rect x="690" y="1302" width="187.33333333333334" height="60" rx="8" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1.5"/>
+<text x="700" y="1322" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="13.5" font-weight="700" fill="#0F172A" text-anchor="start"><tspan x="700" dy="0">4 Graph RAG</tspan></text>
+<text x="700" y="1339" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="12" font-weight="400" fill="#6D28D9" text-anchor="start"><tspan x="700" dy="0">LangGraph</tspan></text>
+<text x="700" y="1354" font-family="'JetBrains Mono', Consolas, monospace" font-size="10.5" font-weight="400" fill="#475569" text-anchor="start"><tspan x="700" dy="0">lex-hybrid-rag-mcp</tspan></text>
+<path d="M878.3333333333334,1332 L886.3333333333334,1332" fill="none" stroke="#6D28D9" stroke-width="1.5" marker-end="url(#ah-6D28D9)"/>
+<rect x="887.3333333333334" y="1302" width="187.33333333333334" height="60" rx="8" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1.5"/>
+<text x="897.3333333333334" y="1322" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="13.5" font-weight="700" fill="#0F172A" text-anchor="start"><tspan x="897.3333333333334" dy="0">5 Z3 critic</tspan></text>
+<text x="897.3333333333334" y="1339" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="12" font-weight="400" fill="#6D28D9" text-anchor="start"><tspan x="897.3333333333334" dy="0">Pydantic-AI</tspan></text>
+<text x="897.3333333333334" y="1354" font-family="'JetBrains Mono', Consolas, monospace" font-size="10.5" font-weight="400" fill="#475569" text-anchor="start"><tspan x="897.3333333333334" dy="0">lex-z3-prover-mcp</tspan></text>
+<path d="M1075.6666666666667,1332 L1083.6666666666667,1332" fill="none" stroke="#6D28D9" stroke-width="1.5" marker-end="url(#ah-6D28D9)"/>
+<rect x="1084.6666666666667" y="1302" width="187.33333333333334" height="60" rx="8" fill="#FFFFFF" stroke="#047857" stroke-width="2"/>
+<text x="1094.6666666666667" y="1322" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="13.5" font-weight="700" fill="#0F172A" text-anchor="start"><tspan x="1094.6666666666667" dy="0">6 Remediation</tspan></text>
+<text x="1094.6666666666667" y="1339" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="12" font-weight="400" fill="#6D28D9" text-anchor="start"><tspan x="1094.6666666666667" dy="0">OpenAI Agents SDK</tspan></text>
+<text x="1094.6666666666667" y="1354" font-family="'JetBrains Mono', Consolas, monospace" font-size="10.5" font-weight="400" fill="#475569" text-anchor="start"><tspan x="1094.6666666666667" dy="0">lex-remediation-pr-mcp</tspan></text>
+<rect x="80" y="1388" width="293.5" height="104" rx="12" fill="#FFFFFF" stroke="#B45309" stroke-width="2"/>
+<text x="94" y="1412" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="14.5" font-weight="800" fill="#B45309" text-anchor="start"><tspan x="94" dy="0">Ollama :11434</tspan></text>
+<text x="94" y="1434" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="12.5" font-weight="400" fill="#475569" text-anchor="start"><tspan x="94" dy="0">llama3.2 · qwen2.5-coder</tspan><tspan x="94" dy="17.5">dolphin3 · deepseek-r1</tspan><tspan x="94" dy="17.5">all-minilm embeddings</tspan></text>
+<rect x="385.5" y="1388" width="293.5" height="104" rx="12" fill="#FFFFFF" stroke="#6D28D9" stroke-width="2"/>
+<text x="399.5" y="1412" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="14.5" font-weight="800" fill="#6D28D9" text-anchor="start"><tspan x="399.5" dy="0">Keycloak :8080</tspan></text>
+<text x="399.5" y="1434" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="12.5" font-weight="400" fill="#475569" text-anchor="start"><tspan x="399.5" dy="0">OIDC sign-in (PKCE S256)</tspan><tspan x="399.5" dy="17.5">realm lexcompiler</tspan><tspan x="399.5" dy="17.5">roles → workspace access</tspan></text>
+<rect x="691" y="1388" width="293.5" height="104" rx="12" fill="#FFFFFF" stroke="#0369A1" stroke-width="2"/>
+<text x="705" y="1412" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="14.5" font-weight="800" fill="#0369A1" text-anchor="start"><tspan x="705" dy="0">Data stores</tspan></text>
+<text x="705" y="1434" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="12.5" font-weight="400" fill="#475569" text-anchor="start"><tspan x="705" dy="0">SQLite (migrated schema)</tspan><tspan x="705" dy="17.5">pgvector · Neo4j (optional)</tspan><tspan x="705" dy="17.5">per-workspace isolation</tspan></text>
+<rect x="996.5" y="1388" width="293.5" height="104" rx="12" fill="#FFFFFF" stroke="#047857" stroke-width="2"/>
+<text x="1010.5" y="1412" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="14.5" font-weight="800" fill="#047857" text-anchor="start"><tspan x="1010.5" dy="0">Python agent adapters</tspan></text>
+<text x="1010.5" y="1434" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="12.5" font-weight="400" fill="#475569" text-anchor="start"><tspan x="1010.5" dy="0">run the six frameworks</tspan><tspan x="1010.5" dy="17.5">→ /api/agents/llm/v1</tspan><tspan x="1010.5" dy="17.5">operator token, token cap</tspan></text>
+<rect x="1354" y="962" width="506" height="548" rx="12" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="2"/>
+<text x="1374" y="992" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="15" font-weight="700" fill="#1E293B" text-anchor="start"><tspan x="1374" dy="0">Outside services</tspan></text>
+<rect x="1374" y="1010" width="466" height="108" rx="12" fill="#FCFCFD" stroke="#047857" stroke-width="2"/>
+<text x="1390" y="1034" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="14.5" font-weight="800" fill="#047857" text-anchor="start"><tspan x="1390" dy="0">GitHub</tspan></text>
+<text x="1390" y="1054" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="12.5" font-weight="400" fill="#475569" text-anchor="start"><tspan x="1390" dy="0">App webhooks: pull_request, push, check_run</tspan><tspan x="1390" dy="17">Checks API: result, annotations, warnings</tspan><tspan x="1390" dy="17">review comments with suggested fixes</tspan><tspan x="1390" dy="17">fix pull requests, only after Z3 proves them</tspan></text>
+<rect x="1374" y="1128" width="466" height="74" rx="12" fill="#FCFCFD" stroke="#B45309" stroke-width="2"/>
+<text x="1390" y="1152" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="14.5" font-weight="800" fill="#B45309" text-anchor="start"><tspan x="1390" dy="0">Cloudflare Tunnel</tspan></text>
+<text x="1390" y="1172" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="12.5" font-weight="400" fill="#475569" text-anchor="start"><tspan x="1390" dy="0">publishes the local server to GitHub</tspan><tspan x="1390" dy="17">proxy headers trusted from loopback only</tspan></text>
+<rect x="1374" y="1212" width="466" height="74" rx="12" fill="#FCFCFD" stroke="#0369A1" stroke-width="2"/>
+<text x="1390" y="1236" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="14.5" font-weight="800" fill="#0369A1" text-anchor="start"><tspan x="1390" dy="0">DeepSeek API</tspan></text>
+<text x="1390" y="1256" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="12.5" font-weight="400" fill="#475569" text-anchor="start"><tspan x="1390" dy="0">cloud model through the AI gateway</tspan><tspan x="1390" dy="17">explanations, fixes, summaries; budgeted</tspan></text>
+<rect x="1374" y="1296" width="466" height="74" rx="12" fill="#FCFCFD" stroke="#B45309" stroke-width="2"/>
+<text x="1390" y="1320" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="14.5" font-weight="800" fill="#B45309" text-anchor="start"><tspan x="1390" dy="0">EUR-Lex · U.S. Federal Register</tspan></text>
+<text x="1390" y="1340" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="12.5" font-weight="400" fill="#475569" text-anchor="start"><tspan x="1390" dy="0">regulation feeds, refreshed daily</tspan><tspan x="1390" dy="17">regulation watch: affected rules + summary</tspan></text>
+<rect x="1374" y="1380" width="466" height="74" rx="12" fill="#FCFCFD" stroke="#6D28D9" stroke-width="2"/>
+<text x="1390" y="1404" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="14.5" font-weight="800" fill="#6D28D9" text-anchor="start"><tspan x="1390" dy="0">Coding assistants</tspan></text>
+<text x="1390" y="1424" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="12.5" font-weight="400" fill="#475569" text-anchor="start"><tspan x="1390" dy="0">Claude Code, Cursor: workspace tools</tspan><tspan x="1390" dy="17">over MCP with OAuth</tspan></text>
+<path d="M1352,1072 L1316,1072" fill="none" stroke="#047857" stroke-width="2.5" marker-end="url(#ah-047857)"/>
+<text x="1332" y="1062" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="11" font-weight="400" fill="#047857" text-anchor="middle"><tspan x="1332" dy="0">signed</tspan></text>
+<path d="M1312,1102 L1348,1102" fill="none" stroke="#047857" stroke-width="2.5" marker-end="url(#ah-047857)"/>
+<text x="1332" y="1120" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="11" font-weight="400" fill="#047857" text-anchor="middle"><tspan x="1332" dy="0">checks</tspan></text>
+<rect x="60" y="1538" width="83" height="24" rx="12" fill="#E2E8F0" stroke="none" stroke-width="0"/>
+<text x="68" y="1553" font-family="'JetBrains Mono', Consolas, monospace" font-size="14" font-weight="400" fill="#1E293B" text-anchor="start"><tspan x="68" dy="0">6 agents</tspan></text>
+<rect x="153" y="1538" width="176" height="24" rx="12" fill="#E2E8F0" stroke="none" stroke-width="0"/>
+<text x="161" y="1553" font-family="'JetBrains Mono', Consolas, monospace" font-size="14" font-weight="400" fill="#1E293B" text-anchor="start"><tspan x="161" dy="0">6 MCP servers built</tspan></text>
+<rect x="339" y="1538" width="243" height="24" rx="12" fill="#E2E8F0" stroke="none" stroke-width="0"/>
+<text x="347" y="1553" font-family="'JetBrains Mono', Consolas, monospace" font-size="14" font-weight="400" fill="#1E293B" text-anchor="start"><tspan x="347" dy="0">4 local models + embeddings</tspan></text>
+<rect x="592" y="1538" width="125" height="24" rx="12" fill="#E2E8F0" stroke="none" stroke-width="0"/>
+<text x="600" y="1553" font-family="'JetBrains Mono', Consolas, monospace" font-size="14" font-weight="400" fill="#1E293B" text-anchor="start"><tspan x="600" dy="0">PR check: 5 s</tspan></text>
+<rect x="727" y="1538" width="234" height="24" rx="12" fill="#E2E8F0" stroke="none" stroke-width="0"/>
+<text x="735" y="1553" font-family="'JetBrains Mono', Consolas, monospace" font-size="14" font-weight="400" fill="#1E293B" text-anchor="start"><tspan x="735" dy="0">rescan after approval: 4 s</tspan></text>
+<rect x="971" y="1538" width="167" height="24" rx="12" fill="#E2E8F0" stroke="none" stroke-width="0"/>
+<text x="979" y="1553" font-family="'JetBrains Mono', Consolas, monospace" font-size="14" font-weight="400" fill="#1E293B" text-anchor="start"><tspan x="979" dy="0">prompt tokens −59%</tspan></text>
+<rect x="1148" y="1538" width="176" height="24" rx="12" fill="#E2E8F0" stroke="none" stroke-width="0"/>
+<text x="1156" y="1553" font-family="'JetBrains Mono', Consolas, monospace" font-size="14" font-weight="400" fill="#1E293B" text-anchor="start"><tspan x="1156" dy="0">309 automated tests</tspan></text>
+<rect x="1334" y="1538" width="142" height="24" rx="12" fill="#E2E8F0" stroke="none" stroke-width="0"/>
+<text x="1342" y="1553" font-family="'JetBrains Mono', Consolas, monospace" font-size="14" font-weight="400" fill="#1E293B" text-anchor="start"><tspan x="1342" dy="0">English + বাংলা</tspan></text>
+<text x="1860" y="1556" font-family="'JetBrains Mono', Consolas, monospace" font-size="14" font-weight="400" fill="#475569" text-anchor="end"><tspan x="1860" dy="0">github.com/MRSHAKILS/LexCompiler</tspan></text>
+</svg>

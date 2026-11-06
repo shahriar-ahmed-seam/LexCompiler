@@ -13,8 +13,33 @@ interface ShareData {
   exceptions: Array<{ rule: string | null; repo: string | null; location: string | null; pr: number | null; reason: string; requestedBy: string | null; requestedAt: string; status: string; decidedBy: string | null; decidedAt: string | null; note: string | null; expiresAt: string | null }>;
   keys: PublicKey[];
   keysUrl: string;
-  records: Array<{ seq: number; headerJson: string; headerSha256: string; signature: string; bodyJson: string; kind: string; text: string }>;
+  records: Array<{ seq: number; headerJson: string; headerSha256: string; signature: string; bodyJson?: string; kind: string; text: string }>;
+  packUrl?: string;
   verification: { ok: boolean; count: number; problems: string[] };
+}
+
+interface ScanView {
+  repo: string;
+  pr: number | null;
+  commit: string;
+  conclusion: string;
+  counts: { new: number; existing: number; waived: number } | null;
+  rules: Array<{ rule: string; version: number }>;
+}
+
+/** A scan record's body as the table reads it: the recorder's fields, or the older snake_case ones. */
+function scanBody(b: Record<string, unknown>): ScanView {
+  const results = Array.isArray(b.results) ? (b.results as Array<{ new?: unknown[]; existing?: unknown[]; waived?: unknown[] }>) : null;
+  const sum = (k: 'new' | 'existing' | 'waived') => (results ?? []).reduce((n, r) => n + (Array.isArray(r[k]) ? (r[k] as unknown[]).length : 0), 0);
+  const versions = Array.isArray(b.ruleVersions) ? (b.ruleVersions as Array<{ ruleKey: string; version: number }>).map((v) => ({ rule: v.ruleKey, version: v.version })) : Array.isArray(b.rules) ? (b.rules as Array<{ rule: string; version: number }>) : [];
+  return {
+    repo: String(b.repo ?? ''),
+    pr: typeof b.pullRequest === 'number' ? b.pullRequest : typeof b.pr === 'number' ? b.pr : null,
+    commit: String(b.commit ?? ''),
+    conclusion: String(b.conclusion ?? ''),
+    counts: results ? { new: sum('new'), existing: sum('existing'), waived: sum('waived') } : (b.counts as ScanView['counts']) ?? null,
+    rules: versions,
+  };
 }
 
 export function SharePage({ token }: { token: string }) {
@@ -39,9 +64,10 @@ export function SharePage({ token }: { token: string }) {
     );
   }
   if (!data || !keys) return <Spinner label="Loading the shared evidence" />;
+  // Records the share withholds have no body and are left out of the table (their headers are still verified).
   const scans = data.records
-    .filter((r) => r.kind === 'check-failed' || r.kind === 'check-passed' || r.kind === 'scan')
-    .map((r) => ({ ...r, body: JSON.parse(r.bodyJson) as { repo: string; pr: number | null; commit: string; conclusion: string; counts?: { new: number; existing: number; waived: number }; rules: Array<{ rule: string; version: number }> }, at: JSON.parse(r.headerJson).at as string }));
+    .filter((r) => (r.kind === 'check-failed' || r.kind === 'check-passed' || r.kind === 'scan') && r.bodyJson !== undefined)
+    .map((r) => ({ ...r, body: scanBody(JSON.parse(r.bodyJson as string)), at: JSON.parse(r.headerJson).at as string }));
   return (
     <div className="min-h-screen">
       <header className="border-b border-zinc-200 bg-white">
@@ -179,7 +205,7 @@ export function SharePage({ token }: { token: string }) {
           </Table>
         </Card>
         <p className="flex items-center justify-center gap-2 pb-8 text-xs text-zinc-500">
-          <FileCheck2 className="size-3.5" /> Generated {formatDate(data.generatedAt, true)} by LexCompiler. Every view of this page is logged for the workspace.
+          <FileCheck2 className="size-3.5" /> Generated {formatDate(data.generatedAt, true)} by LexCompiler. Every view of this page is logged for the workspace.{data.packUrl && <> <a href={data.packUrl} className="text-indigo-600 hover:underline">Download the evidence pack</a>.</>}
         </p>
       </main>
     </div>

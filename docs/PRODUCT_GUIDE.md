@@ -193,12 +193,25 @@ After creating the app:
 
 ### 3.4 Sign-in for Legal and engineering
 
-PR #28 supports any OIDC provider. Running Keycloak locally in Docker is the quickest way to test:
+PR #28 supports any OIDC provider. Running Keycloak locally in Docker is the quickest way to test. With Docker running, one command does all of the steps below (Keycloak 26.4.0, safe to repeat):
+
+```bash
+npm run setup:keycloak
+```
+
+It creates the `lexcompiler` realm, the `lexcompiler-web` client (redirects to `localhost:3001` and `:3002`, S256 PKCE, a `roles` claim, the client id as the access token's audience), the `lexcompiler-admin` role, and the people `arif@finhealth.test` (admin) and `nusrat@finhealth.test`. The generated passwords and client secret go to `<data dir>/keycloak/` (`credentials.json` and `oidc.env`), which is git-ignored. Then:
+
+```bash
+npm run seed:demo -- --owner-email arif@finhealth.test --legal-email nusrat@finhealth.test
+node --env-file=data/keycloak/oidc.env --import tsx server/index.ts
+```
+
+By hand instead:
 
 ```bash
 docker run -d --name lexc-keycloak -p 8080:8080 \
   -e KC_BOOTSTRAP_ADMIN_USERNAME=admin -e KC_BOOTSTRAP_ADMIN_PASSWORD='change-me' \
-  quay.io/keycloak/keycloak:latest start-dev
+  quay.io/keycloak/keycloak:26.4.0 start-dev
 ```
 
 At http://localhost:8080 (log in as `admin`):
@@ -206,7 +219,7 @@ At http://localhost:8080 (log in as `admin`):
 2. Create an OpenID Connect client called `lexcompiler-web`. Turn on client authentication, set the redirect URI to `http://localhost:3001/api/auth/callback`, then copy the client secret.
 3. Create users `nusrat` and `arif`, each with an email and a password that isn't marked temporary.
 
-Pin a Keycloak version once this works. Auth0 or Microsoft Entra ID would also work.
+Keep the realm's role mapper on the claim `roles` (or set `LEXCOMPILER_OIDC_ROLES_CLAIM`). Auth0 or Microsoft Entra ID would also work.
 
 ### 3.5 Who plays whom
 
@@ -425,7 +438,7 @@ app.post('/api/github/webhooks', createNodeMiddleware(githubApp));
 const octokit = await githubApp.getInstallationOctokit(job.installationId);
 const { data: run } = await octokit.rest.checks.create({
   owner, repo, head_sha: job.headSha, name: 'LexCompiler / compliance', status: 'in_progress',
-  details_url: `${process.env.LEXCOMPILER_PUBLIC_URL}/scans/${scanId}`, external_id: scanId,
+  details_url: `${process.env.LEXCOMPILER_PUBLIC_URL}/app/checks/${scanId}`, external_id: scanId,
 });
 
 const { data } = await octokit.rest.repos.downloadTarballArchive({ owner, repo, ref: job.headSha });
@@ -543,7 +556,7 @@ Then:
 
 ### Phase 4. Fixes and exceptions (3–4 days) · scenes 3 and 4
 
-> **Status (#37):** item 3 (exceptions) and item 4 (the Legal inbox) are done: the check run's **Request exception** button, `request_exception` from coding assistants, and a button on each finding in the web app; approval with a required expiry, rejection and revocation; PR comments; re-checks; an expiry sweep every 10 minutes. Items 1 and 2 (fix PRs and suggestion comments) are not built.
+Tested live on October 30 on MRSHAKILS/finhealth-core-platform (results in `docs/HANDOFF.md`, "Live GitHub run"). The App needs **Contents: Read and write** for fix PRs.
 
 **Build**
 
@@ -735,6 +748,8 @@ process.exit(problems.length ? 1 : 0);
    2. Move the date to today. The next scan fails until the fix PR is merged.
 
 ### Phase 7. Put it online for outside testers (1–2 days)
+
+The steps, the settings and a checklist are in `docs/DEPLOY.md`; `deploy/` has the Caddy and compose files.
 
 - **Quick: Cloudflare tunnel.** `cloudflared tunnel --url http://localhost:3001` gives a temporary public HTTPS URL. Use it for:
   - the App's webhook URL (no smee needed);
@@ -1027,14 +1042,17 @@ cd agents && ../.venv-agents/bin/python -m lexcompiler_agents agent-z3-formal-cr
 
 The run's gate is NOTHING_TO_FIX, PATCH_VERIFIED, PATCH_BLOCKED or INCOMPLETE (a step failed; the chain stops there). What passes between agents comes from tool results only, never from model text, so a model's mistake can't travel down the chain.
 
-- **On the server:** `POST /api/agents/crew/runs` runs it. Every step is a direct tool call and costs nothing; `{"useModels": true}` (operator only) also lets each agent's model read what it received and report, within the agents' daily budget. `GET /api/agents/crew/runs` and `/runs/<id>` read stored runs (migration 5, `agent_crew_runs`).
+- **On the server:** `POST /api/agents/crew/runs` runs it. Every step is a direct tool call and costs nothing; `{"useModels": true}` (operator only) also lets each agent's model read what it received and report, within the agents' daily budget. `GET /api/agents/crew/runs` and `/runs/<id>` read stored runs (migration 12, `agent_crew_runs`).
+- **On a workspace repository:** `POST /api/workspaces/<id>/repos/<repoId>/crew-runs` runs the crew on the default branch's files with the rules in effect for that repository, each rule on its scope's paths only. `{"openPullRequest": true}` opens a fix pull request for a patch that passed the gate, through the same path as "Open fix PR". Members see their workspace's runs at `GET /api/workspaces/<id>/crew-runs`.
 - **In Python:** `python -m lexcompiler_agents crew` runs the six framework agents in order, each given the previous agent's report as context. The gate comes from the remediation tool's own result. The run is sent to `POST /api/agents/crew/runs/import` (operator only), which fills in each agent's tokens from `ai_calls`. `--no-store` only prints it.
 
 **In the product,** keep two agents that do real work:
-- **Regulation watch** (Phase 6) reads new Federal Register and EUR-Lex items, summarizes them, finds the rules they may affect with RAG, and puts drafts in Legal's inbox. It has no tool that approves.
-- **Fix agent** (Phase 4) writes patches when no template applies, inside the Z3 gate.
+- **Regulation watch** (Phase 6) reads new Federal Register and EUR-Lex items, summarizes them, and finds the rules they may affect. Built (#29) with the rule match by category rather than RAG, shown on each feed item ("May affect R-3"); Legal drafts a rule change with a click. It has no tool that drafts or approves on its own.
+- **Fix agent** (Phase 4) writes patches when no template applies, inside the Z3 gate. Built (#30) in the crew on workspace repositories: after a blocked template patch, verified model fixes are listed as suggestions; they parse and pass Z3 and the rescan, but may call helpers that don't exist, so they are reviewed, never committed. `{"allRules": true}` (the panel's "Check every rule in effect") runs the crew on every rule rather than those the feed touches.
 
 The other steps stay plain pipelines, and the screens call them that.
+
+**On the workspace screen** (`/legal`, "Agent crew"): a button per repository runs the crew without models; on a GitHub repository a checkbox asks for a fix pull request when Z3 proves the patch. Recent runs show the repository and commit, the gate (Nothing to fix, Patch proven by Z3, Patch not proven, A step failed) and, opened, each agent's step and the pull request.
 
 ### 5.8 MCP
 
@@ -1245,6 +1263,7 @@ claude mcp add --transport http lexcompiler http://localhost:3001/mcp \
 
 - Claude Desktop runs on macOS, Windows and, as a beta, on Ubuntu 22.04 or later and Debian 12 or later ([install steps](https://code.claude.com/docs/en/desktop-linux)). This machine runs Ubuntu 24.04, so you can test it here.
 - Custom connectors (Settings → Connectors) need a public HTTPS server that uses OAuth or no authentication, so they work only after Phase 7 and OAuth.
+  - LexCompiler serves OAuth since #17: on the public HTTPS URL, add `https://<domain>/mcp` as a custom connector; Claude Desktop discovers the sign-in from `/.well-known/oauth-protected-resource`, registers itself, and opens the consent page, where you pick the workspace.
 - Until then, bridge with `mcp-remote` in `claude_desktop_config.json`. Open it with Settings → Developer → Edit Config, which creates the file if it's missing. On macOS it's in `~/Library/Application Support/Claude/`, and on Windows in `%APPDATA%\Claude\`.
 
 ```json
@@ -1404,6 +1423,16 @@ With today's demo server, ask for `prove_repository_compliance_z3` instead of `c
 | Antigravity | | | | | |
 
 After Phase 4a, repeat with the HTTP configuration and ask "Check my changes before I commit". `check_changes` should report R-1 at line 20 as new, as the check run on PR #1 does. Then ask for an exception: it should appear in Nusrat's inbox, and the assistant should have no way to approve it.
+
+**HTTP results (Phase 4a, Windows 11, October 30).** A scratch server on port 3012 had the FinHealth workspace with the built-in rules approved and `main` of finhealth-core-platform as its repository. The token was Tanvir's (engineer).
+
+| Client | Version | Connected | Tool called | Named line 20 | Notes |
+|---|---|---|---|---|---|
+| Claude Code | 2.1.201 | Yes: `initialize`, `tools/list` and `prompts/list` succeeded with `${LEXCOMPILER_TOKEN}` from `.mcp.json` | Not yet | Not yet | The CLI on this machine isn't signed in, so `claude -p` stopped before the model ran. Sign in and run the prompt again |
+| Cursor | installed | Not tried | | | GUI; use the configuration from `/settings` |
+| VS Code with Copilot | installed | Not tried | | | GUI |
+| Kiro, Codex, Antigravity, Claude Desktop | not installed | | | | |
+| Plain HTTP script (2026-07-28) | — | Yes | `check_changes`, `suggest_fix`, `request_exception` | Yes | 1 new finding (R-1, `api/loan_applications.py:20`), 6 existing, as on PR #1; `check_changes` took 1.5 s. `suggest_fix` answered "no verified fix" for R-1. The request reached Nusrat's inbox as "from a coding assistant"; `approve_exception` doesn't exist. The call log held paths and fingerprints, no code |
 
 ### 5.10 Showing the AI to judges
 

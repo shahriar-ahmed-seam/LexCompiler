@@ -4,7 +4,7 @@ import { readTargetRepoFiles } from './analyzer/repoBaseline.js';
 import { getInitialClauses } from './compiler/legalCompiler.js';
 import { verifyRepositoryAgainstClauses } from './prover/z3Engine.js';
 import { CYPHER, createInMemoryGraphStore, createNeo4jGraphStore, entityEdges, type Neo4jDriverLike } from './rag/graphStore.js';
-import { executeHybridRagQuery, executeStoreBackedRagQuery } from './rag/hybridRagEngine.js';
+import { bm25Tokens, executeHybridRagQuery, executeStoreBackedRagQuery, stemToken } from './rag/hybridRagEngine.js';
 import { openPgliteVectorStore } from './rag/vectorStore.js';
 
 const unit = (i: number, dims = 8) => Array.from({ length: dims }, (_, j) => (j === i % dims ? 1 : 0.01 * ((i + j) % 3)));
@@ -100,5 +100,26 @@ describe('store-backed Graph RAG', () => {
     } finally {
       await vectorStore.close();
     }
+  });
+});
+
+describe('BM25 terms', () => {
+  it('stems plurals, -ing, -ed and -ion, and leaves codes and paths alone', () => {
+    expect(['fields', 'collect', 'collected', 'collection', 'collects'].map(stemToken)).toEqual(['field', 'collect', 'collect', 'collect', 'collect']);
+    expect(['logs', 'logged', 'logging', 'policies', 'addresses', 'status', 'basis'].map(stemToken)).toEqual(['log', 'log', 'log', 'policy', 'address', 'status', 'basis']);
+    expect(['ssn', 'us-east-1', 'fastapi_intake.py', 'aes256'].map(stemToken)).toEqual(['ssn', 'us-east-1', 'fastapi_intake.py', 'aes256']);
+  });
+
+  it('adds the parts of camelCase, snake_case and dotted identifiers', () => {
+    const t = bm25Tokens('{"collectedPiiFields":["full_name"]} PatientIntakePayload api/fastapi_intake.py');
+    expect(t).toEqual(expect.arrayContaining(['collectedpiifield', 'collect', 'pii', 'field', 'full_name', 'full', 'name', 'patientintakepayload', 'patient', 'intake', 'payload', 'fastapi_intake.py', 'fastapi', 'py']));
+  });
+
+  it('finds the collection model for "which fields does … collect" questions', async () => {
+    const clauses = getInitialClauses();
+    const a = await analyzeFullRepositoryAsync(readTargetRepoFiles());
+    const v = await verifyRepositoryAgainstClauses(clauses, a.sqlTables, a.astFindings);
+    const top = executeHybridRagQuery('Which fields does the patient intake payload collect?', clauses, a.sqlTables, a.astFindings, v.proofs, 5).retrievedChunks.map((r) => r.chunk.chunkId);
+    expect(top).toContain('chunk-ast-ast-py-model-api/fastapi_intake.py-PatientIntakePayload');
   });
 });

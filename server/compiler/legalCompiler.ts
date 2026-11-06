@@ -953,6 +953,63 @@ export function compileLegalProseToFormalPolicy(
   );
 }
 
+/** Values Legal sets on a rule card; each replaces what the parser read from the text. */
+export interface RuleValueOverrides {
+  maxRetentionHours?: number;
+  requiresTenantIsolatedKeys?: boolean;
+  minAiConfidenceThreshold?: number;
+  allowedDataRegions?: string[];
+  maxBreachNotificationHours?: number;
+}
+
+/** Compiles a clause with Legal's values in place of the parser's, and notes each one as reviewed. */
+export function compileLegalProseWithOverrides(
+  rawText: string,
+  category: RuleCategory,
+  clauseId: string,
+  citation: string,
+  overrides: RuleValueOverrides
+): { deontic: DeonticExtraction; compiled: CompiledPolicyArtifacts } {
+  const b = extractDeonticBoundsFromProse(rawText, category);
+  const set: string[] = [];
+  if (overrides.maxRetentionHours !== undefined) {
+    b.maxRetentionHours = overrides.maxRetentionHours;
+    b.maxRetentionDays = Math.max(1, Math.round((overrides.maxRetentionHours / 24) * 10) / 10);
+    b.temporalHit = true;
+    set.push(`maxRetentionHours=${overrides.maxRetentionHours}`);
+  }
+  if (overrides.requiresTenantIsolatedKeys !== undefined) {
+    b.requiresTenantIsolatedKeys = overrides.requiresTenantIsolatedKeys;
+    set.push(`requiresTenantIsolatedKeys=${overrides.requiresTenantIsolatedKeys}`);
+  }
+  if (overrides.minAiConfidenceThreshold !== undefined) {
+    b.minAiConfidenceThreshold = overrides.minAiConfidenceThreshold;
+    b.confidenceHit = true;
+    set.push(`minAiConfidenceThreshold=${overrides.minAiConfidenceThreshold}`);
+  }
+  if (overrides.allowedDataRegions !== undefined) {
+    b.allowedDataRegions = [...overrides.allowedDataRegions];
+    set.push(`allowedDataRegions=${overrides.allowedDataRegions.join(",")}`);
+  }
+  if (overrides.maxBreachNotificationHours !== undefined) {
+    b.maxBreachNotificationHours = overrides.maxBreachNotificationHours;
+    set.push(`maxBreachNotificationHours=${overrides.maxBreachNotificationHours}`);
+  }
+  if (set.length > 0) {
+    // A value Legal set is a reviewed value, not a parser default: the prover stops asking for review.
+    b.provenance = {
+      ...b.provenance,
+      method: "LEGAL_REVIEW",
+      evidence: [
+        ...b.provenance.evidence,
+        `set by Legal on the rule card: ${set.join("; ")}`,
+        ...set.map((s) => `legal:${s}`),
+      ],
+    };
+  }
+  return compileFromBounds(b, category, clauseId, citation);
+}
+
 export async function compileLegalProseToFormalPolicyAsync(
   rawText: string,
   category: RuleCategory,
@@ -1305,7 +1362,13 @@ async function withOfficialEurLexText(items: LiveRegulatoryFeedItem[], fetchImpl
   ];
 }
 
-export async function fetchLiveRegulatoryFeed(fetchImpl: typeof fetch = fetch): Promise<LiveRegulatoryFeedItem[]> {
+/** LEXCOMPILER_REGULATORY_FEED=offline: the default feed makes no network calls and serves its offline items. */
+const offlineFetch: typeof fetch = async () => {
+  throw new Error('the regulatory feed is offline (LEXCOMPILER_REGULATORY_FEED=offline)');
+};
+
+export async function fetchLiveRegulatoryFeed(fetchImpl?: typeof fetch): Promise<LiveRegulatoryFeedItem[]> {
+  fetchImpl ??= process.env.LEXCOMPILER_REGULATORY_FEED === 'offline' ? offlineFetch : fetch;
   const curated: LiveRegulatoryFeedItem[] = [
     {
       id: 'EURLEX-32024R1689-ART14',

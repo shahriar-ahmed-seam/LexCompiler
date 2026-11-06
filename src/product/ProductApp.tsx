@@ -1,5 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
-import { FileCheck2, GitPullRequest, Inbox, LayoutDashboard, Loader2, LogOut, Scale, Settings, SquareTerminal, FlaskConical } from 'lucide-react';
+import { FileCheck2, GitPullRequest, Inbox, LayoutDashboard, Loader2, LogOut, Scale, Settings, SquareTerminal, FlaskConical, Gavel, Plug } from 'lucide-react';
 import { api, navigate, useApi, usePath } from './api';
 import { Avatar, Badge, cx, EmptyState, Link, ToastProvider } from './ui';
 import { ROLE_LABEL, type ExceptionRecord, type Me, type Role } from './types';
@@ -32,7 +32,9 @@ export function ProductApp() {
     document.body.className = 'antialiased';
   }, []);
   const path = usePath();
-  return <ToastProvider>{path.startsWith('/share/') ? <SharePage token={decodeURIComponent(path.slice(7).split(/[?#]/)[0])} /> : <SessionGate path={path} />}</ToastProvider>;
+  // /share/<token> normally opens the auditor page in src/components/share; ?view=product is this app's copy.
+  const productShare = path.startsWith('/share/') && new URLSearchParams(path.split('?')[1] ?? '').get('view') === 'product';
+  return <ToastProvider>{productShare ? <SharePage token={decodeURIComponent(path.slice(7).split(/[?#]/)[0])} /> : <SessionGate path={path} />}</ToastProvider>;
 }
 
 function SessionGate({ path }: { path: string }) {
@@ -47,7 +49,14 @@ function SessionGate({ path }: { path: string }) {
   useEffect(() => {
     void load();
   }, [load]);
-  const [chosen, setChosen] = useState<string | null>(() => localStorage.getItem('lexc.workspace'));
+  // ?workspace=<id> (links from checks and the other screens) wins over the last workspace used.
+  const [chosen, setChosen] = useState<string | null>(() => {
+    try {
+      return new URLSearchParams(window.location.search).get('workspace') || localStorage.getItem('lexc.workspace');
+    } catch {
+      return null;
+    }
+  });
 
   if (me === undefined) {
     return (
@@ -160,10 +169,16 @@ function Shell({ path, children }: { path: string; children: React.ReactNode }) 
               </Link>
             );
           })}
-          <div className="pt-4">
-            <a href="/lab" className="flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-sm text-zinc-500 hover:bg-zinc-50 hover:text-zinc-900">
-              <FlaskConical className="size-4 text-zinc-400" aria-hidden /> Engine console
-            </a>
+          <div className="space-y-0.5 pt-4">
+            {[
+              { href: '/legal', label: 'Legal workspace', icon: Gavel },
+              { href: '/settings', label: 'Assistant connection', icon: Plug },
+              { href: '/lab', label: 'Engine console', icon: FlaskConical },
+            ].map((l) => (
+              <a key={l.href} href={l.href} className="flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-sm text-zinc-500 hover:bg-zinc-50 hover:text-zinc-900">
+                <l.icon className="size-4 text-zinc-500" aria-hidden /> {l.label}
+              </a>
+            ))}
           </div>
         </nav>
         <div className="flex items-center gap-2.5 border-t border-zinc-100 px-4 py-3">

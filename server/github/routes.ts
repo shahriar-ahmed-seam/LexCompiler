@@ -3,7 +3,7 @@ import express from 'express';
 import type { Request, Response } from 'express';
 import { OidcProvider, type Principal, type SessionStore } from '../auth/oidc.js';
 import type { JobQueue } from '../jobs/queue.js';
-import type { ProductStore, User } from '../product/store.js';
+import { can, type ProductStore, type User } from '../product/store.js';
 import { isLoopbackHostname } from '../security.js';
 import { convertAppManifest, type GitHubApp, type GitHubUrls } from './client.js';
 import { saveGitHubAppCredentials, type GitHubAppCredentials } from './credentials.js';
@@ -156,7 +156,8 @@ export function createGitHubRoutes(deps: GitHubRouteDeps) {
       setup_url: `${publicUrl}/github/setup`,
       setup_on_update: true,
       public: false,
-      default_permissions: { checks: 'write', contents: 'read', pull_requests: 'write', metadata: 'read' },
+      // Contents: write lets "Open fix PR" create its commit and branch (Git Data API).
+      default_permissions: { checks: 'write', contents: 'write', pull_requests: 'write', metadata: 'read' },
       default_events: ['pull_request', 'push', 'check_run', 'check_suite'],
     };
     sendPage(
@@ -164,7 +165,7 @@ export function createGitHubRoutes(deps: GitHubRouteDeps) {
       200,
       'Register the LexCompiler GitHub App',
       `<p>GitHub will create a private app owned by ${org ? `the organization <b>${esc(org)}</b>` : 'your GitHub account'} with these settings. You can change the name on the next page.</p>
-<table><tr><th>Permissions</th><td>Checks: write · Pull requests: write · Contents: read · Metadata: read</td></tr>
+<table><tr><th>Permissions</th><td>Checks: write · Pull requests: write · Contents: read and write (fix pull requests) · Metadata: read</td></tr>
 <tr><th>Events</th><td>Pull request · Push · Check run · Check suite (installation events are always sent)</td></tr>
 <tr><th>Webhook URL</th><td><code>${esc(deps.webhookUrl)}</code></td></tr>
 <tr><th>Back to</th><td><code>${esc(publicUrl)}</code></td></tr></table>
@@ -306,8 +307,27 @@ export function createGitHubRoutes(deps: GitHubRouteDeps) {
 
   // ---------------------------------------------------------------- 3. a scan, linked from the GitHub check run
 
-  // Older check runs link here; the scan page is part of the web app now.
-  r.get('/scans/:scanId', (req, res) => res.redirect(302, `/app/checks/${encodeURIComponent(String(req.params.scanId))}`));
+  r.get('/scans/:scanId', async (req, res) => {
+    const who = await signedIn(req, res);
+    if (!who) return;
+    const scan = store.getScanById(String(req.params.scanId));
+    const workspaceId = scan ? store.getRepo(scan.repoId)?.workspaceId : null;
+    const allowed = scan && workspaceId && (who.principal.globalRole === 'admin' || can(store.roleOf(workspaceId, who.user.id), 'view'));
+    if (!scan || !allowed) return sendPage(res, 404, 'Scan not found', '');
+    const findings = store.listFindings(scan.id);
+    const s = scan.summary;
+    sendPage(
+      res,
+      200,
+      `${scan.repoFullName} @ ${scan.commitSha.slice(0, 7)}`,
+      `<p>${scan.prNumber ? `Pull request #${esc(scan.prNumber)} · ` : ''}${esc(scan.trigger)} · <b>${esc(scan.conclusion ?? scan.status)}</b>${scan.error ? ` · <span class="new">${esc(scan.error)}</span>` : ''}</p>
+${s ? `<p><span class="new">${s.newCount} new</span> · <span class="existing">${s.existingCount} existing</span> · <span class="waived">${s.waivedCount} waived</span>${s.undecidedRuleKeys.length ? ` · undecided: ${esc(s.undecidedRuleKeys.join(', '))}` : ''}</p>` : ''}
+<table><tr><th>State</th><th>Rule</th><th>Location</th><th>Finding</th></tr>
+${findings.map((f) => `<tr><td class="${esc(f.state)}">${esc(f.state)}</td><td>${esc(f.ruleKey)}</td><td><code>${esc(f.filePath)}:${f.startLine}</code></td><td>${esc(f.message)}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">No findings.</td></tr>'}</table>
+<p><a href="/app/checks/${encodeURIComponent(scan.id)}">Open in the web app</a></p>
+<p class="muted">Rules ${esc(scan.ruleVersions.map((v) => `${v.ruleKey} v${v.version}`).join(', '))} · ${scan.filesScanned ?? 0} files · LexCompiler ${esc(scan.lexcompilerVersion)} · commit <code>${esc(scan.commitSha)}</code></p>`
+    );
+  });
 
   return r;
 }

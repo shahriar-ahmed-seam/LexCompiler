@@ -1,0 +1,12 @@
+# HTTPS in front of LexCompiler (product guide, Phase 7). Caddy gets and renews the certificate
+# for LEXCOMPILER_DOMAIN and forwards to the app with X-Forwarded-Proto/-For, which the app
+# trusts through LEXCOMPILER_TRUST_PROXY=1.
+{$LEXCOMPILER_DOMAIN} {
+	encode gzip
+	reverse_proxy lexcompiler:3001
+	header {
+		-Server
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+	}
+}

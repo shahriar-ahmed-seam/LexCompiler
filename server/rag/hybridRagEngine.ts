@@ -3,7 +3,7 @@ import {
   computeRealNeuralEmbedding,
   runRealLlmInference,
 } from '../services/realAiServiceMesh.js';
-import { inferRuleCategoryFromProse } from '../compiler/legalCompiler.js';
+import { inferRuleCategoryWithEvidence } from '../compiler/legalCompiler.js';
 import { countTokens } from '../optimization/tokenOptimizer.js';
 import { getGraphStore, type GraphStore } from './graphStore.js';
 import { getCrossEncoder } from './reranker.js';
@@ -90,6 +90,49 @@ function tokenizeWords(text: string): string[] {
     .replace(/[^a-z0-9_.-]+/g, ' ')
     .split(/\s+/)
     .filter((w) => w.length > 1);
+}
+
+/**
+ * Light English stemming for BM25: plural, -ing, -ed and -ion endings, so "fields" matches
+ * "field" and "collect" matches "collected" or "collection". Tokens with digits, dots or
+ * dashes (paths, regions, versions) and short words stay as they are.
+ */
+export function stemToken(word: string): string {
+  if (word.length <= 3 || !/^[a-z]+$/.test(word)) return word;
+  let w = word;
+  if (w.endsWith('ies') && w.length > 4) w = `${w.slice(0, -3)}y`;
+  else if (w.endsWith('sses')) w = w.slice(0, -2);
+  else if (w.endsWith('s') && !/(ss|us|is)$/.test(w)) w = w.slice(0, -1);
+  for (const suffix of ['ions', 'ion', 'ing', 'ed']) {
+    if (w.endsWith(suffix) && w.length - suffix.length >= 4) {
+      w = w.slice(0, -suffix.length);
+      // "logged" → "logg" → "log"; "stopping" → "stop"
+      if (/([^aeiouslz])\1$/.test(w)) w = w.slice(0, -1);
+      break;
+    }
+  }
+  return w;
+}
+
+/**
+ * BM25 terms: each word, plus the parts of identifiers (camelCase, snake_case and dotted
+ * names), stemmed. "collectedPiiFields" yields collect, pii and field next to the whole name.
+ */
+export function bm25Tokens(text: string): string[] {
+  const out: string[] = [];
+  for (const raw of text.split(/[^A-Za-z0-9_.-]+/)) {
+    if (!raw) continue;
+    const whole = raw.toLowerCase();
+    if (whole.length > 1) out.push(stemToken(whole));
+    const parts = raw
+      .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+      .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+      .split(/[\s_.-]+/)
+      .map((p) => p.toLowerCase())
+      .filter((p) => p.length > 1);
+    if (parts.length > 1) for (const p of parts) out.push(stemToken(p));
+  }
+  return out;
 }
 
 /**
@@ -258,15 +301,18 @@ interface RetrievalOptions {
   rerankBackend?: string;
 }
 
-/** Graph seeds: entities named in the query plus the ids of the query category's clauses. */
-export function graphSeeds(query: string, category: RuleCategory, clauses: LegalClause[], entities: Iterable<string>): string[] {
+/**
+ * Graph seeds: entities named in the query plus the ids of the query category's clauses. With no
+ * category evidence (`category` null) only named entities seed the traversal.
+ */
+export function graphSeeds(query: string, category: RuleCategory | null, clauses: LegalClause[], entities: Iterable<string>): string[] {
   const q = query.toLowerCase();
   const seeds = new Set<string>();
   for (const node of entities) {
     if (node.startsWith('chunk:') || node.length < 4) continue;
     if (q.includes(node)) seeds.add(node);
   }
-  for (const c of clauses.filter((x) => x.category === category)) seeds.add(c.id.toLowerCase());
+  if (category) for (const c of clauses.filter((x) => x.category === category)) seeds.add(c.id.toLowerCase());
   return [...seeds];
 }
 
@@ -280,8 +326,24 @@ function chunkDistancesFrom(dist: Map<string, number>, chunks: ContextualRagChun
   return { chunkDistance, reachedTriples };
 }
 
-function categoryHyde(query: string, clauses: LegalClause[]): { category: RuleCategory; hyde: string } {
-  const category = inferRuleCategoryFromProse(query);
+/**
+ * The query's category and a HyDE expansion from that category's clause. The category comes from
+ * the wording, or else from a clause whose citation the query names ("বাংলাদেশ ব্যাংক ধারা ৪.২").
+ * A query with neither ("which fields does the payload collect?") keeps the retention fallback for
+ * the answer, but gets no expansion and no category graph seeds, which would rank the retention
+ * clause first.
+ */
+function categoryHyde(query: string, clauses: LegalClause[]): { category: RuleCategory; seedCategory: RuleCategory | null; hyde: string } {
+  const q = query.toLowerCase();
+  const named = clauses.find((c) =>
+    c.citation
+      .split('/')
+      .map((part) => part.trim().toLowerCase())
+      .some((part) => part.length >= 4 && q.includes(part))
+  );
+  const seedCategory = inferRuleCategoryWithEvidence(query) ?? named?.category ?? null;
+  const category = seedCategory ?? 'RETENTION_AND_TENANT_KMS';
+  if (!seedCategory) return { category, seedCategory, hyde: '' };
   const clause = clauses.find((c) => c.category === category);
   const hyde = clause
     ? clause.compiled.smtLib2Snippet
@@ -289,13 +351,13 @@ function categoryHyde(query: string, clauses: LegalClause[]): { category: RuleCa
         .filter((l) => l.startsWith('(assert'))
         .join(' ')
     : `(assert true) ; no active clause for ${category}`;
-  return { category, hyde: `${hyde} ; HyDE expansion for: ${query}` };
+  return { category, seedCategory, hyde: `${hyde} ; HyDE expansion for: ${query}` };
 }
 
 /** 2-hop traversal of the statute ↔ code knowledge graph from entities named in the query. */
 function graphDistances(
   query: string,
-  category: RuleCategory,
+  category: RuleCategory | null,
   clauses: LegalClause[],
   chunks: ContextualRagChunk[],
   triples: KnowledgeGraphTriple[]
@@ -373,7 +435,7 @@ function hybridRetrieve(
 ): RagQueryExecutionReport {
   const t0 = performance.now();
   const { chunks, triples } = buildContextualRagCorpus(clauses, sqlTables, astFindings, proofs);
-  const { category, hyde } = categoryHyde(query, clauses);
+  const { category, seedCategory, hyde } = categoryHyde(query, clauses);
   const rewrittenDeonticQuery = `DEONTIC_SEARCH(query="${query}", category=${category}, modalities=[OBLIGATION, PROHIBITION], targets=[SQL DDL, Python AST, TypeScript AST, Z3 proofs])`;
   const queryText = `${query} ${hyde}`;
 
@@ -387,10 +449,10 @@ function hybridRetrieve(
   }
 
   // BM25 (k1 = 1.5, b = 0.75) with document frequencies over token sets
-  const docs = chunks.map((c) => tokenizeWords(c.contextualizedText));
+  const docs = chunks.map((c) => bm25Tokens(c.contextualizedText));
   const docSets = docs.map((d) => new Set(d));
   const avgDl = docs.reduce((acc, d) => acc + d.length, 0) / Math.max(1, docs.length);
-  const queryTokens = [...new Set(tokenizeWords(queryText))];
+  const queryTokens = [...new Set(bm25Tokens(queryText))];
   const bm25Raw = docs.map((d, idx) => {
     const tf = new Map<string, number>();
     for (const t of d) tf.set(t, (tf.get(t) || 0) + 1);
@@ -410,7 +472,7 @@ function hybridRetrieve(
   // Graph
   const { chunkDistance, reachedTriples } = options.entityDistances
     ? chunkDistancesFrom(options.entityDistances, chunks, triples)
-    : graphDistances(query, category, clauses, chunks, triples);
+    : graphDistances(query, seedCategory, clauses, chunks, triples);
 
   // Reciprocal Rank Fusion over the three rankings (k = 60)
   const rankOf = (scores: number[]) => {
@@ -548,7 +610,7 @@ export async function executeStoreBackedRagQuery(
 ): Promise<RagQueryExecutionReport> {
   const t0 = performance.now();
   const { chunks, triples } = buildContextualRagCorpus(clauses, sqlTables, astFindings, proofs);
-  const { category, hyde } = categoryHyde(query, clauses);
+  const { seedCategory, hyde } = categoryHyde(query, clauses);
   const hashing = async (text: string) => ({ embedding: computeSemanticEmbedding(text), model: '384-d feature hashing' });
   let embed = deps.embed || hashing;
 
@@ -577,7 +639,7 @@ export async function executeStoreBackedRagQuery(
   await graphStore.load(triples);
   // Entities linked only from chunks are not graph edges but can still be named by the query.
   const known = new Set([...(await graphStore.entities()), ...chunks.flatMap((c) => c.linkedGraphEntities.map((e) => e.toLowerCase()))]);
-  const seeds = graphSeeds(query, category, clauses, known);
+  const seeds = graphSeeds(query, seedCategory, clauses, known);
   const entityDistances = await graphStore.distancesFrom(seeds, 2);
 
   const options: RetrievalOptions = {

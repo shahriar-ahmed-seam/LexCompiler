@@ -1,9 +1,10 @@
+import path from 'node:path';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { describe, expect, it } from 'vitest';
 import { analyzeFullRepositoryAsync } from './analyzer/astAnalyzer.js';
 import { readTargetRepoFiles } from './analyzer/repoBaseline.js';
-import { getInitialClauses } from './compiler/legalCompiler.js';
+import { getBanglaInitialClauses, getInitialClauses } from './compiler/legalCompiler.js';
 import { verifyRepositoryAgainstClauses } from './prover/z3Engine.js';
 import { evaluateRag, judgeAnswer, loadEvalDataset, scoreRanking } from './rag/evaluation.js';
 import { executeHybridRagQuery } from './rag/hybridRagEngine.js';
@@ -27,10 +28,25 @@ describe('retrieval evaluation', () => {
     for (const q of loadEvalDataset()) for (const id of Object.keys(q.relevant)) expect(all).toContain(id);
     const report = await evaluateRag(async (q, k) => executeHybridRagQuery(q, clauses, a.sqlTables, a.astFindings, v.proofs, k));
     expect(report.questions).toBe(16);
-    // Measured on the fixture: MRR 0.656, nDCG@5 0.542, hit rate 0.938.
-    expect(report.aggregate.mrr).toBeGreaterThanOrEqual(0.6);
-    expect(report.aggregate.ndcgAtK).toBeGreaterThanOrEqual(0.5);
-    expect(report.aggregate.hitRate).toBeGreaterThanOrEqual(0.9);
+    // Measured on the fixture: MRR 0.88, nDCG@5 0.795, hit rate 1.0 (0.786, 0.64, 0.938 before stemmed BM25).
+    expect(report.aggregate.mrr).toBeGreaterThanOrEqual(0.85);
+    expect(report.aggregate.ndcgAtK).toBeGreaterThanOrEqual(0.75);
+    expect(report.aggregate.hitRate).toBe(1);
+  });
+
+  it('Bangla questions over the Bangla clause set stay above the regression floor', async () => {
+    const clauses = getBanglaInitialClauses();
+    const a = await analyzeFullRepositoryAsync(readTargetRepoFiles());
+    const v = await verifyRepositoryAgainstClauses(clauses, a.sqlTables, a.astFindings);
+    const dataset = loadEvalDataset(path.join(process.cwd(), 'server/rag/eval/dataset.bn.json'));
+    const all = executeHybridRagQuery('x', clauses, a.sqlTables, a.astFindings, v.proofs, 100).retrievedChunks.map((r) => r.chunk.chunkId);
+    for (const q of dataset) for (const id of Object.keys(q.relevant)) expect(all).toContain(id);
+    const report = await evaluateRag(async (q, k) => executeHybridRagQuery(q, clauses, a.sqlTables, a.astFindings, v.proofs, k), { dataset });
+    expect(report.questions).toBe(10);
+    // Measured: MRR 0.95, nDCG@5 0.755, hit rate 1.0 (nDCG@5 0.597 before stemmed BM25).
+    expect(report.aggregate.mrr).toBeGreaterThanOrEqual(0.9);
+    expect(report.aggregate.ndcgAtK).toBeGreaterThanOrEqual(0.7);
+    expect(report.aggregate.hitRate).toBe(1);
   });
 
   it('LLM judge: faithfulness is the share of supported claims', async () => {

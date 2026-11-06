@@ -92,6 +92,8 @@ beforeAll(async () => {
 afterAll(() => {
   api?.close();
   idp?.server.close();
+  // Windows cannot delete an open database file.
+  store?.db.close();
   fs.rmSync(dataDir, { recursive: true, force: true });
 });
 

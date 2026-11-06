@@ -1,0 +1,16 @@
+{
+  "description": "Bangla questions over the bundled fixture with the Bangla clause set (getBanglaInitialClauses). Relevance: 2 = primary evidence, 1 = supporting.",
+  "clauses": "bn",
+  "questions": [
+    { "id": "bn01", "query": "কোন এন্ডপয়েন্ট লগে ssn বা email প্লেইনটেক্সটে লেখে?", "relevant": { "chunk-ast-ast-py-logger-api/fastapi_intake.py-33-4": 2, "chunk-law-CLAUSE-HIPAA-312B": 1, "chunk-proof-CLAUSE-HIPAA-312B": 1 } },
+    { "id": "bn02", "query": "সাইবার নিরাপত্তা ধারা ২৬ অনুযায়ী অ্যাপ্লিকেশন লগে কী নিষিদ্ধ?", "relevant": { "chunk-law-CLAUSE-HIPAA-312B": 2, "chunk-proof-CLAUSE-HIPAA-312B": 1 } },
+    { "id": "bn03", "query": "Redis ক্যাশ রোগীর সেশন কত ঘণ্টা রাখে?", "relevant": { "chunk-ast-ast-py-retention-workers/redis_cache_worker.py-PII_CACHE_TTL_HOURS": 2, "chunk-law-CLAUSE-DPA-4.2": 1 } },
+    { "id": "bn04", "query": "patient_records টেবিল কি ৪৮ ঘণ্টার অপসারণ সীমা মানে?", "relevant": { "chunk-sql-patient_records": 2, "chunk-ast-ast-sql-schema/postgres_pii.sql-patient_records": 2, "chunk-law-CLAUSE-DPA-4.2": 1, "chunk-proof-CLAUSE-DPA-4.2": 1 } },
+    { "id": "bn05", "query": "কোন টেবিলে টেন্যান্ট KMS কী কলাম নেই?", "relevant": { "chunk-sql-patient_records": 2, "chunk-ast-ast-sql-schema/postgres_pii.sql-patient_records": 2, "chunk-proof-CLAUSE-DPA-4.2": 1 } },
+    { "id": "bn06", "query": "এআই নীতিমালা অনুচ্ছেদ ১৪: ৮৫% আত্মবিশ্বাসের নিচে কি ক্রেডিট ট্রায়াজ স্বয়ংক্রিয়ভাবে অনুমোদন করে?", "relevant": { "chunk-ast-ast-ts-ai-services/ai_credit_triage.ts-MIN_CONFIDENCE_FOR_AUTO_APPROVAL": 2, "chunk-law-CLAUSE-EU-AI-14": 1, "chunk-proof-CLAUSE-EU-AI-14": 1 } },
+    { "id": "bn07", "query": "মানব তদারকি গেট সম্পর্কে এআই নীতিমালা কী বলে?", "relevant": { "chunk-law-CLAUSE-EU-AI-14": 2, "chunk-proof-CLAUSE-EU-AI-14": 1 } },
+    { "id": "bn08", "query": "রোগীর টেলিমেট্রি কোথায় দেশের বাইরে replicate হয়? us-east-1", "relevant": { "chunk-ast-ast-ts-egress-services/cross_border_sync.ts-REPLICA_TARGET_REGION": 2, "chunk-law-CLAUSE-GDPR-44": 1, "chunk-proof-CLAUSE-GDPR-44": 1 } },
+    { "id": "bn09", "query": "ডাটা রেসিডেন্সি ধারা ৪৪ আন্তঃসীমান্ত স্থানান্তর সম্পর্কে কী বলে?", "relevant": { "chunk-law-CLAUSE-GDPR-44": 2, "chunk-proof-CLAUSE-GDPR-44": 1 } },
+    { "id": "bn10", "query": "Z3 কেন বাংলাদেশ ব্যাংক ধারা ৪.২ খণ্ডন করে?", "relevant": { "chunk-proof-CLAUSE-DPA-4.2": 2, "chunk-law-CLAUSE-DPA-4.2": 1, "chunk-sql-patient_records": 1 } }
+  ]
+}

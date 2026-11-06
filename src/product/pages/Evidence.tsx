@@ -3,7 +3,7 @@ import { Download, ExternalLink, FileCheck2, Link2, ShieldCheck, ShieldX } from 
 import { api, formatDate, timeAgo, useApi } from '../api';
 import { useSession } from '../ProductApp';
 import { Badge, Button, Card, CodeBlock, CopyButton, EmptyState, ErrorNote, Field, Input, Modal, Mono, Notice, PageHeader, Select, Spinner, Table, Td, Th, useToast } from '../ui';
-import { can, type EvidenceRecord, type PublicKey, type ShareRecord } from '../types';
+import { can, type EvidenceRecord, type PublicKey, type RuleSummary, type ShareRecord } from '../types';
 import { verifyInBrowser, type BrowserCheck } from '../verify';
 
 const TYPE_TONE: Record<string, 'indigo' | 'red' | 'green' | 'amber' | 'blue' | 'gray'> = {
@@ -40,7 +40,7 @@ export function VerifyPanel({ records, keys, server }: { records: Array<{ header
           result.ok ? (
             <>
               <div className="font-medium text-zinc-900">Verified in your browser: {result.count} signatures, unbroken chain</div>
-              <div className="text-sm text-zinc-500">Ed25519 signatures and SHA-256 links checked with Web Crypto in {result.ms} ms, by code running on your side.</div>
+              <div className="text-sm text-zinc-500">Signatures ({keys[0]?.algorithm === 'ECDSA_P256_SHA256' ? 'ECDSA P-256' : 'Ed25519'}) and SHA-256 links checked with Web Crypto in {result.ms} ms, by code running on your side.</div>
             </>
           ) : (
             <>
@@ -72,6 +72,10 @@ export function EvidencePage() {
   const check = useApi<{ ok: boolean; count: number; problems: string[] }>(`/workspaces/${workspace.id}/evidence/verify`, { pollMs: 15000 });
   const sharer = can(workspace.role, 'createShares');
   const shares = useApi<ShareRecord[]>(sharer ? `/workspaces/${workspace.id}/shares` : null);
+  const ruleList = useApi<RuleSummary[]>(sharer ? `/workspaces/${workspace.id}/rule-list` : null);
+  const inEffect = (ruleList.data ?? []).filter((r) => r.current);
+  // null means every rule in effect (the default); otherwise the ids the link is limited to.
+  const [picked, setPicked] = useState<string[] | null>(null);
   const [open, setOpen] = useState<number | null>(null);
   const [creating, setCreating] = useState(false);
   const [created, setCreated] = useState<ShareRecord | null>(null);
@@ -83,7 +87,7 @@ export function EvidencePage() {
     setBusy(true);
     try {
       const s = await api<ShareRecord>(`/workspaces/${workspace.id}/shares`, {
-        body: { label: form.label, periodFrom: `${form.from}T00:00:00.000Z`, periodTo: `${form.to}T23:59:59.999Z`, expiresAt: new Date(Date.now() + Number(form.days) * 86_400_000).toISOString() },
+        body: { label: form.label, ...(picked ? { ruleIds: picked } : {}), periodFrom: `${form.from}T00:00:00.000Z`, periodTo: `${form.to}T23:59:59.999Z`, expiresAt: new Date(Date.now() + Number(form.days) * 86_400_000).toISOString() },
       });
       setCreated(s);
       setCreating(false);
@@ -112,7 +116,7 @@ export function EvidencePage() {
     <>
       <PageHeader
         title="Evidence"
-        description="An append-only log. Every rule decision, check, exception and share is signed with Ed25519 and carries the hash of the record before it, so a removed or changed record is detectable."
+        description="An append-only log. Every rule decision, check, exception and share is signed and carries the hash of the record before it, so a removed or changed record is detectable."
         actions={
           <Button icon={<Download className="size-4" />} onClick={download} disabled={!log.data?.entries.length}>
             Download log
@@ -222,7 +226,7 @@ export function EvidencePage() {
         footer={
           <>
             <Button onClick={() => setCreating(false)}>Cancel</Button>
-            <Button variant="primary" loading={busy} onClick={create} disabled={!form.label.trim()}>
+            <Button variant="primary" loading={busy} onClick={create} disabled={!form.label.trim() || picked?.length === 0}>
               Create link
             </Button>
           </>
@@ -239,12 +243,37 @@ export function EvidencePage() {
             <Input id="share-to" type="date" value={form.to} onChange={(e) => setForm({ ...form, to: e.target.value })} />
           </Field>
         </div>
+        {inEffect.length > 0 && (
+          <fieldset>
+            <legend className="mb-1.5 text-sm font-medium text-zinc-800">Rules included</legend>
+            <div className="space-y-1.5 rounded-lg border border-zinc-200 p-3">
+              {inEffect.map((r) => {
+                const on = picked === null || picked.includes(r.id);
+                return (
+                  <label key={r.id} className="flex cursor-pointer items-center gap-2 text-sm text-zinc-700">
+                    <input
+                      type="checkbox"
+                      checked={on}
+                      onChange={() => {
+                        const base = picked ?? inEffect.map((x) => x.id);
+                        setPicked(on ? base.filter((id) => id !== r.id) : [...base, r.id]);
+                      }}
+                    />
+                    <span className="font-mono text-xs text-zinc-500">{r.key}</span> {r.title}
+                  </label>
+                );
+              })}
+            </div>
+            {picked?.length === 0 && <p className="mt-1 text-xs text-rose-700">Pick at least one rule.</p>}
+          </fieldset>
+        )}
         <Field label="Link expires after" htmlFor="share-days">
           <Select id="share-days" value={form.days} onChange={(e) => setForm({ ...form, days: e.target.value })}>
             <option value="1">1 day</option>
             <option value="7">7 days</option>
             <option value="30">30 days</option>
             <option value="90">90 days</option>
+            <option value="365">1 year</option>
           </Select>
         </Field>
       </Modal>
