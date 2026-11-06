@@ -17,11 +17,7 @@ Written October 31, 2026, by Shakil Ahmed's working session. This is the one pag
 | Full product guide | `docs/PRODUCT_GUIDE.md` |
 | Scripts to re-record the video or redraw the diagram | `docs/video/tools/` |
 
-**Two repositories exist, and they are not the same.**
-- `MRSHAKILS/LexCompiler` is the complete product: legal workspace, agent crew on workspace repositories, regulation watch, fix agent, AI explanations.
-- `shahriar-ahmed-seam/LexCompiler` has its own separate work, plus the agent crew from PRs #41 and #42.
-
-They conflict in 15 files, because both built the same features separately. `docs/submission/MERGE_CONFLICTS.md` explains every conflict and the decisions you two need to make. Do not merge them before the deadline.
+**The two repositories were merged after the submission** (November 7, 2026, branch `merge/seam-main`). See `docs/submission/MERGE_CONFLICTS.md` for what was kept and dropped.
 
 The video and the diagram show the complete product, so **submit `https://github.com/MRSHAKILS/LexCompiler` as the GitHub URL** unless the two are combined first. The form notes already say this.
 

@@ -25,7 +25,7 @@ Left:
 - choose the live demo URL;
 - submit.
 
-The two repositories conflict in 15 files, because both built the same phases separately: see `docs/submission/MERGE_CONFLICTS.md`. Combining them is a decision for both authors, after the submission.
+The two repositories were merged on November 7, 2026, on the branch `merge/seam-main`: for each feature the better implementation was kept. See `docs/submission/MERGE_CONFLICTS.md`.
 
 ## Working rules
 
@@ -75,6 +75,8 @@ The two repositories conflict in 15 files, because both built the same phases se
 | 6 Contract and regulation changes | Done and tested (scenes 5 and 6 through the API on the fixture, and the PR warning against a fake GitHub). The live GitHub run needs the App credentials. "Open fix PR" (scene 5 step 4) works since #12 |
 | 7 Online for outside testers | Code and configuration ready (#11, `docs/DEPLOY.md`); not deployed. Needs a tunnel or a VPS with a domain, and the GitHub App credentials. The Docker image wasn't rebuilt here (Docker Desktop was off) |
 | seam #37-#40 | Shahriar's demo cycle merged in: web app at `/app`, password sign-in, exception revoke, rule-card analyzer, share-link verification in the browser, agent crew foundation |
+| merge/seam-main (this PR) | Merged Shahriar's version (`main` at 69a7b31) into this one: one codebase, the better implementation of each feature, migrations 15-17, web app at `/`, old dashboard at `/lab`. See `docs/submission/MERGE_CONFLICTS.md` |
+| MRSHAKILS/LexCompiler #37 | Discards model-written fixes that call names nothing in the repository defines |
 
 ## What works today
 
