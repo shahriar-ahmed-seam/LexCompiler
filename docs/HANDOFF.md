@@ -6,6 +6,69 @@ Updated October 30, 2026, after PR #40. Judging is on **December 26, 2026**.
 
 This file covers where the work stands, how to run the demo, the demo-video script, and what's next. The full plan is in `docs/PRODUCT_GUIDE.md`: section 4 has the build phases, section 5 covers AI, RAG and MCP, and section 7 has the schedule.
 
+## Work in progress (November 7, 2026): start here
+
+Read this section first. It says what was done in the last working session, what is waiting on a branch, and how to finish it.
+
+### Merged into `main` in both repositories
+
+- **The two versions are one codebase** (MRSHAKILS/LexCompiler #38, shahriar-ahmed-seam/LexCompiler #45). For each feature, the better implementation was kept and the duplicate was dropped. The full record is `docs/submission/MERGE_CONFLICTS.md`: what was kept and why, the database migrations 15-17, the URLs, and what is left open.
+- **The fix agent discards fixes that call names nothing defines** (#37). In the live run, it rejected the 2 bad fixes and kept the 4 good ones.
+- **Both `main` branches have the same files.** Their commit ids differ only because each repository recorded its own merge commit.
+
+### Waiting on branches (not merged): finish these next
+
+The last session pushed both branches but did not open PRs for them.
+
+**1. `feat/n8n-events`: workspace event webhooks and an n8n workflow**
+- **What it does:**
+  - A workspace owner sets a webhook URL with `PUT /api/workspaces/<id>/webhook`. The secret is returned only on create or rotate.
+  - LexCompiler then POSTs signed JSON events to that URL: `scan.completed`, `regulation.watch`, `exception.requested` and `exception.decided`, plus a `webhook.test` event.
+  - The signature is `X-LexCompiler-Signature: sha256=<HMAC of the body>`. Deliveries go through the job queue, with retries and a delivery log (`GET .../webhook/deliveries`).
+  - Plain `http` and private addresses are refused unless `LEXCOMPILER_ALLOW_PRIVATE_WEBHOOKS=1` is set.
+  - `integrations/n8n/lexcompiler-events.workflow.json` is the n8n workflow. It verifies the signature, routes by event type and formats a message. Its Slack and Email nodes are disabled until credentials are added. `integrations/n8n/README.md` explains how to run it.
+- **Tested live** against n8n 2.46.6 in Docker:
+  - the workflow imports and publishes with n8n's own commands;
+  - a tampered event gets 401;
+  - the test event gets 200;
+  - a real `scan.completed` (the loan-applications repository, conclusion failure, 7 findings) gets 200 on the first attempt.
+- **Fixed after the live test:**
+  - delivery now tries every checked address, so `localhost` works when it resolves to `::1` first;
+  - a delivery stops without retrying if the event type was unsubscribed or the webhook deleted.
+- **Checks on the branch:** typecheck and lint pass, and the full suite passes: 63 files, 367 tests.
+- **Left to do:**
+  1. Re-run the live n8n test using `http://localhost:5678/...` to confirm the fallback fix. The commands are in `integrations/n8n/README.md`; the container name is `lexc-n8n`.
+  2. Run the review: try to break the SSRF guard, the signing and the retries.
+  3. Run the full check, open a PR, and merge into both repositories.
+  4. Optionally, show the webhook settings in the web app's Settings page. Today it is API only.
+- **Database:** migration 18 (`workspace_webhooks`, `webhook_deliveries_out`).
+
+**2. `feat/fetch-act-text`: the amended act's text for Legal, and "Import from URL"**
+- **What it does:**
+  - On a feed change notice, the Legal workspace shows "Fetch the act's text".
+  - EUR-Lex acts come from the Publications Office's official **Cellar** interface: `https://publications.europa.eu/resource/celex/<CELEX>`, with the brackets percent-encoded, for example `32016R0679R%2802%29`. Federal Register documents come from its official API.
+  - The text becomes a regulation document linked to the feed item, and Legal drafts the rule change as usual. Nothing is approved automatically.
+  - "Import from URL" in the upload form uses **Browserbase Fetch** (`POST https://api.browserbase.com/v1/fetch`, key in `BROWSERBASE_API_KEY`) for other public pages.
+  - Routes: `POST .../feed/<itemId>/fetch-text`, `POST .../documents/from-url` and `GET .../integrations`.
+- **Rule: never bypass a site's bot protection.** EUR-Lex's website is behind an AWS bot challenge, so it is not fetched; Cellar is used instead. If a page answers Browserbase with a challenge, LexCompiler stops and asks Legal to download the document and upload it. Proxies are never enabled.
+- **Checks on the branch:** typecheck and lint pass, and the full suite passes: 62 files, 350 tests. It was built from `main` before the n8n branch, so rebase or merge one after the other.
+- **Left to do:**
+  1. A live run on a real feed item, for example the GDPR corrigendum 32016R0679R(02). Live checks already confirmed that Cellar returns 24 KB for the corrigendum and 807 KB for the GDPR.
+  2. Decide one point: if a feed item already has a short "Draft rule change" document, fetch-text returns that one and does not fetch the full act. It probably should fetch the full text.
+  3. Review, full check, PR, and merge into both repositories.
+
+### Local setup on Shakil's laptop (not in Git)
+
+- **Secrets:**
+  - `.env` and `data/live/agents.env`: DeepSeek and agent settings, and the API token.
+  - `.env.local`: ElevenLabs and Browserbase keys.
+  - `data/live/`: the live database, the GitHub App key, the Keycloak passwords.
+
+  Ask Shakil for what you need, privately.
+- **The `browse` CLI loads `.env` automatically.** Run it with `BROWSE_LOAD_DOTENV=0` so the other keys don't reach it.
+- **Docker:** the Keycloak container is `lexc-keycloak`, and the n8n test container is `lexc-n8n`, which can be removed after the test.
+- **Models used in this work:** Opus planned and reviewed; Sonnet built and fixed; Haiku checked review findings.
+
 ## Submission handover (October 31, 2026)
 
 The CloudCamp BD submission is due **October 31, 11:59 PM GMT+6**, and a teammate is taking over. **Follow `docs/submission/TEAMMATE_CHECKLIST.md`:** it lists what is left, in order, what to check, and which private files must come from Shakil.
@@ -75,7 +138,7 @@ The two repositories were merged on November 7, 2026, on the branch `merge/seam-
 | 6 Contract and regulation changes | Done and tested (scenes 5 and 6 through the API on the fixture, and the PR warning against a fake GitHub). The live GitHub run needs the App credentials. "Open fix PR" (scene 5 step 4) works since #12 |
 | 7 Online for outside testers | Code and configuration ready (#11, `docs/DEPLOY.md`); not deployed. Needs a tunnel or a VPS with a domain, and the GitHub App credentials. The Docker image wasn't rebuilt here (Docker Desktop was off) |
 | seam #37-#40 | Shahriar's demo cycle merged in: web app at `/app`, password sign-in, exception revoke, rule-card analyzer, share-link verification in the browser, agent crew foundation |
-| merge/seam-main (this PR) | Merged Shahriar's version (`main` at 69a7b31) into this one: one codebase, the better implementation of each feature, migrations 15-17, web app at `/`, old dashboard at `/lab`. See `docs/submission/MERGE_CONFLICTS.md` |
+| MRSHAKILS/LexCompiler #38 (merge/seam-main) | Merged Shahriar's version (`main` at 69a7b31) into this one: one codebase, the better implementation of each feature, migrations 15-17, web app at `/`, old dashboard at `/lab`. See `docs/submission/MERGE_CONFLICTS.md` |
 | MRSHAKILS/LexCompiler #37 | Discards model-written fixes that call names nothing in the repository defines |
 
 ## What works today
