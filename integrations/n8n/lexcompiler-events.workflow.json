@@ -1,0 +1,545 @@
+{
+  "name": "LexCompiler events",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lexcompiler",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": true
+        }
+      },
+      "id": "a1000000-0000-4000-8000-000000000001",
+      "name": "LexCompiler webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "webhookId": "b2000000-0000-4000-8000-000000000001"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Checks X-LexCompiler-Signature: sha256=<hex HMAC-SHA256(secret, raw body)> over the exact bytes LexCompiler sent.\nconst crypto = require('crypto');\nconst item = $input.first();\nconst secret = $env.LEXCOMPILER_WEBHOOK_SECRET;\nif (!secret) throw new Error('Set LEXCOMPILER_WEBHOOK_SECRET on the n8n container (see integrations/n8n/README.md).');\n\nconst headers = item.json.headers || {};\nconst given = String(headers['x-lexcompiler-signature'] || '');\n\n// The Webhook node (option \"Raw Body\") keeps the unparsed body as binary data, in the property \"data\".\nlet raw = null;\nif (item.binary && item.binary.data) {\n  try {\n    raw = await this.helpers.getBinaryDataBuffer(0, 'data');\n  } catch (err) {\n    raw = Buffer.from(item.binary.data.data || '', 'base64');\n  }\n}\nif (!raw) return [{ json: { valid: false, reason: 'the raw body is not available: turn on Raw Body on the Webhook node', event: null } }];\n\nconst expected = 'sha256=' + crypto.createHmac('sha256', secret).update(raw).digest('hex');\nconst a = Buffer.from(given);\nconst b = Buffer.from(expected);\nconst valid = a.length === b.length && crypto.timingSafeEqual(a, b);\nlet event = null;\nif (valid) {\n  try {\n    event = JSON.parse(raw.toString('utf8'));\n  } catch (err) {\n    return [{ json: { valid: false, reason: 'the body is not JSON', event: null } }];\n  }\n}\nreturn [{ json: { valid, event } }];"
+      },
+      "id": "a1000000-0000-4000-8000-000000000002",
+      "name": "Verify signature",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "00000000-0000-4000-8000-000000000101",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a1000000-0000-4000-8000-000000000003",
+      "name": "Signature valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: \"invalid signature\" }) }}",
+        "options": {
+          "responseCode": 401
+        }
+      },
+      "id": "a1000000-0000-4000-8000-000000000004",
+      "name": "Respond 401",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        680,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "00000000-0000-4000-8000-0000000000201",
+                    "leftValue": "={{ $json.event.type === 'scan.completed' && ($json.event.data.counts.new > 0 || $json.event.data.conclusion === 'failure') }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "true",
+                      "singleValue": true
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renamedOutput": true,
+              "outputKey": "scan.completed (needs attention)"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "00000000-0000-4000-8000-0000000000202",
+                    "leftValue": "={{ $json.event.type }}",
+                    "rightValue": "regulation.watch",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renamedOutput": true,
+              "outputKey": "regulation.watch"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "00000000-0000-4000-8000-0000000000203",
+                    "leftValue": "={{ $json.event.type }}",
+                    "rightValue": "exception.requested",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renamedOutput": true,
+              "outputKey": "exception.requested"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "00000000-0000-4000-8000-0000000000204",
+                    "leftValue": "={{ $json.event.type }}",
+                    "rightValue": "exception.decided",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renamedOutput": true,
+              "outputKey": "exception.decided"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "00000000-0000-4000-8000-0000000000205",
+                    "leftValue": "={{ $json.event.type }}",
+                    "rightValue": "webhook.test",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renamedOutput": true,
+              "outputKey": "webhook.test"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      },
+      "id": "a1000000-0000-4000-8000-000000000005",
+      "name": "Event type",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        680,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const e = $input.first().json.event;\nconst d = e.data;\nconst where = d.repository + (d.prNumber ? ' pull request #' + d.prNumber : '') + ' at commit ' + String(d.commit).slice(0, 7);\nconst lines = (d.findings || [])\n  .filter((f) => f.state === 'new')\n  .slice(0, 5)\n  .map((f) => '- ' + f.rule + ': ' + f.path + ':' + f.line + ' ' + (f.message || ''));\nconst more = d.counts.new > lines.length ? '\\n...and ' + (d.counts.new - lines.length) + ' more new findings.' : '';\nreturn [{ json: {\n  title: 'LexCompiler check ' + (d.conclusion || 'finished') + ' on ' + d.repository,\n  text: where + ' was checked: ' + d.counts.new + ' new, ' + d.counts.existing + ' existing and ' + d.counts.waived + ' waived findings.' + (lines.length ? '\\n' + lines.join('\\n') + more : ''),\n  url: d.url || '',\n} }];"
+      },
+      "id": "a1000000-0000-4000-8000-000000000011",
+      "name": "Format scan.completed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        940,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const d = $input.first().json.event.data;\nconst rules = (d.matchedRules || []).join(', ') || 'none';\nreturn [{ json: {\n  title: 'Regulation watch: ' + d.title,\n  text: (d.summary ? d.summary + '\\n' : '') + 'This notice may affect these rules: ' + rules + '. Legal decides whether a rule changes.',\n  url: d.link || '',\n} }];"
+      },
+      "id": "a1000000-0000-4000-8000-000000000012",
+      "name": "Format regulation.watch",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        940,
+        130
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const d = $input.first().json.event.data;\nconst where = d.path ? ' in ' + d.path + (d.line ? ':' + d.line : '') : '';\nreturn [{ json: {\n  title: 'Exception requested for ' + d.rule,\n  text: (d.requester || 'Someone') + ' asked for an exception to ' + d.rule + (d.repository ? ' on ' + d.repository : '') + where + '. It is waiting for Legal.',\n  url: d.url || '',\n} }];"
+      },
+      "id": "a1000000-0000-4000-8000-000000000013",
+      "name": "Format exception.requested",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        940,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const d = $input.first().json.event.data;\nconst where = d.path ? ' in ' + d.path + (d.line ? ':' + d.line : '') : '';\nconst until = d.status === 'approved' && d.expiresAt ? ' until ' + String(d.expiresAt).slice(0, 10) : '';\nreturn [{ json: {\n  title: 'Exception ' + d.status + ' for ' + d.rule,\n  text: 'The exception to ' + d.rule + (d.repository ? ' on ' + d.repository : '') + where + ' was ' + d.status + until + '.' + (d.decisionNote ? ' Note: ' + d.decisionNote : ''),\n  url: d.url || '',\n} }];"
+      },
+      "id": "a1000000-0000-4000-8000-000000000014",
+      "name": "Format exception.decided",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        940,
+        390
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const e = $input.first().json.event;\nreturn [{ json: {\n  title: 'LexCompiler test event',\n  text: (e.data && e.data.message) || 'This is a test event from LexCompiler.',\n  url: (e.data && e.data.url) || '',\n} }];"
+      },
+      "id": "a1000000-0000-4000-8000-000000000015",
+      "name": "Format webhook.test",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        940,
+        520
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "a1000000-0000-4000-8000-000000000006",
+      "name": "Message ready",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1180,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ received: true, type: $('Verify signature').first().json.event.type }) }}",
+        "options": {}
+      },
+      "id": "a1000000-0000-4000-8000-000000000007",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        1420,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "C0000000000",
+          "mode": "id"
+        },
+        "text": "={{ '*' + $json.title + '*\\n' + $json.text + ($json.url ? '\\n' + $json.url : '') }}",
+        "otherOptions": {}
+      },
+      "id": "a1000000-0000-4000-8000-000000000008",
+      "name": "Slack (disabled)",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        1420,
+        300
+      ],
+      "disabled": true,
+      "notes": "Turn this on, pick a channel and add your Slack credential."
+    },
+    {
+      "parameters": {
+        "fromEmail": "lexcompiler@example.com",
+        "toEmail": "legal@example.com",
+        "subject": "={{ $json.title }}",
+        "emailFormat": "text",
+        "text": "={{ $json.text + ($json.url ? '\\n\\n' + $json.url : '') }}",
+        "options": {}
+      },
+      "id": "a1000000-0000-4000-8000-000000000009",
+      "name": "Email (disabled)",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1420,
+        480
+      ],
+      "disabled": true,
+      "notes": "Turn this on, set the addresses and add your SMTP credential."
+    }
+  ],
+  "connections": {
+    "LexCompiler webhook": {
+      "main": [
+        [
+          {
+            "node": "Verify signature",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify signature": {
+      "main": [
+        [
+          {
+            "node": "Signature valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Signature valid?": {
+      "main": [
+        [
+          {
+            "node": "Event type",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 401",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Event type": {
+      "main": [
+        [
+          {
+            "node": "Format scan.completed",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Format regulation.watch",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Format exception.requested",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Format exception.decided",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Format webhook.test",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format scan.completed": {
+      "main": [
+        [
+          {
+            "node": "Message ready",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format regulation.watch": {
+      "main": [
+        [
+          {
+            "node": "Message ready",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format exception.requested": {
+      "main": [
+        [
+          {
+            "node": "Message ready",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format exception.decided": {
+      "main": [
+        [
+          {
+            "node": "Message ready",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format webhook.test": {
+      "main": [
+        [
+          {
+            "node": "Message ready",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Message ready": {
+      "main": [
+        [
+          {
+            "node": "Respond OK",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Slack (disabled)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Email (disabled)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

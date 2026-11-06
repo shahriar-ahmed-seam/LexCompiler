@@ -246,6 +246,29 @@ export interface ExceptionRecord {
   message: string | null;
 }
 
+/** A workspace's outbound event webhook (server/events/outbound.ts). The secret never leaves the server except when it is created or rotated. */
+export interface WorkspaceWebhook {
+  workspaceId: string;
+  url: string;
+  secret: string;
+  events: string[];
+  createdBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+export interface OutboundDelivery {
+  id: string;
+  workspaceId: string;
+  eventId: string;
+  eventType: string;
+  status: 'pending' | 'delivered' | 'failed';
+  attempts: number;
+  responseStatus: number | null;
+  error: string | null;
+  createdAt: string;
+  deliveredAt: string | null;
+}
+
 /** Personal access tokens for the MCP endpoint (product guide, Phase 4a). Only the SHA-256 is stored. */
 export const API_TOKEN_PREFIX = 'lexc_pat_';
 export const API_TOKEN_DEFAULT_DAYS = 90;
@@ -1863,6 +1886,98 @@ export class ProductStore {
       .prepare(`SELECT DISTINCT path_glob FROM counterparty_scope WHERE repo_id = ? AND counterparty_id IN (${placeholders})`)
       .all(repoId, ...scope.counterpartyIds) as Row[];
     return rows.map((r) => String(r.path_glob));
+  }
+
+  // ---------------------------------------------------------------- outbound event webhooks
+
+  private webhookFrom(r: Row): WorkspaceWebhook {
+    return {
+      workspaceId: String(r.workspace_id),
+      url: String(r.url),
+      secret: String(r.secret),
+      events: JSON.parse(String(r.events_json)) as string[],
+      createdBy: str(r.created_by),
+      createdAt: String(r.created_at),
+      updatedAt: String(r.updated_at),
+    };
+  }
+
+  /** The workspace's webhook with its secret (for signing); routes must not return the secret. */
+  getWorkspaceWebhook(workspaceId: string): WorkspaceWebhook | undefined {
+    const r = this.db.prepare('SELECT * FROM workspace_webhooks WHERE workspace_id = ?').get(workspaceId) as Row | undefined;
+    return r ? this.webhookFrom(r) : undefined;
+  }
+
+  /**
+   * Creates or updates the webhook. The secret is made here (32 random bytes, base64url) when the
+   * webhook is new or `rotateSecret` is set; `newSecret` is then the only time it is handed out.
+   */
+  setWorkspaceWebhook(
+    workspaceId: string,
+    input: { url: string; events: string[]; rotateSecret?: boolean; secret?: string; createdBy?: string | null }
+  ): { webhook: WorkspaceWebhook; newSecret: string | null } {
+    const existing = this.getWorkspaceWebhook(workspaceId);
+    const now = nowIso();
+    const events = JSON.stringify([...new Set(input.events)]);
+    if (!existing) {
+      const secret = input.secret ?? crypto.randomBytes(32).toString('base64url');
+      this.db
+        .prepare('INSERT INTO workspace_webhooks (workspace_id, url, secret, events_json, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .run(workspaceId, input.url, secret, events, input.createdBy ?? null, now, now);
+      return { webhook: this.getWorkspaceWebhook(workspaceId)!, newSecret: secret };
+    }
+    const rotated = input.rotateSecret || input.secret ? (input.secret ?? crypto.randomBytes(32).toString('base64url')) : null;
+    this.db
+      .prepare('UPDATE workspace_webhooks SET url = ?, secret = ?, events_json = ?, updated_at = ? WHERE workspace_id = ?')
+      .run(input.url, rotated ?? existing.secret, events, now, workspaceId);
+    return { webhook: this.getWorkspaceWebhook(workspaceId)!, newSecret: rotated };
+  }
+
+  deleteWorkspaceWebhook(workspaceId: string): boolean {
+    return Number(this.db.prepare('DELETE FROM workspace_webhooks WHERE workspace_id = ?').run(workspaceId).changes) > 0;
+  }
+
+  recordOutboundDelivery(input: { workspaceId: string; eventId: string; eventType: string }): OutboundDelivery {
+    const id = newId();
+    this.db
+      .prepare("INSERT INTO webhook_deliveries_out (id, workspace_id, event_id, event_type, status, attempts, created_at) VALUES (?, ?, ?, ?, 'pending', 0, ?)")
+      .run(id, input.workspaceId, input.eventId, input.eventType, nowIso());
+    return this.getOutboundDelivery(input.eventId)!;
+  }
+
+  /** Records an attempt's result; `delivered_at` is set when the status becomes delivered. */
+  updateOutboundDelivery(eventId: string, input: { status: OutboundDelivery['status']; attempts: number; responseStatus?: number | null; error?: string | null }): void {
+    this.db
+      .prepare('UPDATE webhook_deliveries_out SET status = ?, attempts = ?, response_status = ?, error = ?, delivered_at = ? WHERE event_id = ?')
+      .run(input.status, input.attempts, input.responseStatus ?? null, input.error ? input.error.slice(0, 500) : null, input.status === 'delivered' ? nowIso() : null, eventId);
+  }
+
+  getOutboundDelivery(eventId: string): OutboundDelivery | undefined {
+    const r = this.db.prepare('SELECT * FROM webhook_deliveries_out WHERE event_id = ?').get(eventId) as Row | undefined;
+    return r ? this.deliveryFrom(r) : undefined;
+  }
+
+  /** The newest 50 events sent to the workspace's webhook. */
+  listOutboundDeliveries(workspaceId: string): OutboundDelivery[] {
+    const rows = this.db
+      .prepare('SELECT * FROM webhook_deliveries_out WHERE workspace_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 50')
+      .all(workspaceId) as Row[];
+    return rows.map((r) => this.deliveryFrom(r));
+  }
+
+  private deliveryFrom(r: Row): OutboundDelivery {
+    return {
+      id: String(r.id),
+      workspaceId: String(r.workspace_id),
+      eventId: String(r.event_id),
+      eventType: String(r.event_type),
+      status: r.status as OutboundDelivery['status'],
+      attempts: Number(r.attempts),
+      responseStatus: r.response_status == null ? null : Number(r.response_status),
+      error: str(r.error),
+      createdAt: String(r.created_at),
+      deliveredAt: str(r.delivered_at),
+    };
   }
 }
 

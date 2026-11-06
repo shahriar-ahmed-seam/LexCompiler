@@ -1,4 +1,5 @@
 import type { EvidenceRecorder } from '../evidence/records.js';
+import { emitWorkspaceEvent, exceptionEventData } from '../events/outbound.js';
 import { exceptionPullRequests, recheckForException } from '../github/exceptions.js';
 import type { JobQueue } from '../jobs/queue.js';
 import { GovernanceStore } from './governance.js';
@@ -91,6 +92,7 @@ export async function requestExceptions(
     if (created) {
       fresh.push(exception);
       await deps.evidence?.exceptionRequested(exception);
+      emitWorkspaceEvent(deps, input.workspaceId, 'exception.requested', exceptionEventData(exception, deps.publicUrl));
     }
   }
   const byPr = new Map<string, ExceptionRecord[]>();
@@ -122,6 +124,7 @@ export async function decideException(
     approve ? { approve: true, note: input.note, expiresAt: input.expiresAt as string } : { approve: false, note: input.note }
   );
   await deps.evidence?.exceptionChanged(e);
+  emitWorkspaceEvent(deps, input.workspaceId, 'exception.decided', exceptionEventData(e, deps.publicUrl));
   const who = personName(deps, input.userId);
   let rerunJobId: string | null = null;
   if (approve) {

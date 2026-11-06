@@ -73,7 +73,7 @@ export async function runDueJobs(
       for (const ws of deps.store.listWorkspaces()) {
         if (deps.ai.settings(ws.id).mode === 'off') continue;
         try {
-          summarized += (await watchRegulationFeed({ store: deps.store, ai: deps.ai }, ws.id)).summarized;
+          summarized += (await watchRegulationFeed({ store: deps.store, ai: deps.ai, events: deps.events }, ws.id)).summarized;
         } catch (err) {
           console.error(`[regulation watch] ${ws.name}: ${err instanceof Error ? err.message : String(err)}`);
         }

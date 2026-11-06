@@ -439,6 +439,14 @@ Built-in clauses and curated feed items are **illustrative**: they paraphrase th
 
 ---
 
+## n8n workflow automation
+
+A workspace owner can point the workspace at a webhook URL. LexCompiler then sends a signed JSON event when a scan completes (`scan.completed`), the regulation watch finds a notice that may affect rules (`regulation.watch`), or an exception is requested or decided (`exception.requested`, `exception.decided`). Events carry rule keys, repository, commit, file path and line, never source code. The webhook is set with `PUT /api/workspaces/:id/webhook` (the signing secret is returned once), tried with `POST .../webhook/test`, and listed with `GET .../webhook/deliveries`. Local and private addresses need `LEXCOMPILER_ALLOW_PRIVATE_WEBHOOKS=1`.
+
+`integrations/n8n/lexcompiler-events.workflow.json` is a ready n8n workflow that verifies the signature and formats each event as a message, with optional Slack and email nodes (off by default). Setup with Docker is in [integrations/n8n/README.md](integrations/n8n/README.md).
+
+---
+
 ## License
 
 MIT License (see [`LICENSE`](LICENSE)). Built for the International AI Builders Congress (JusticeSphere AI — ComplianceOS / GovernanceIQ Track) by:

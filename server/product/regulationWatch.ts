@@ -1,5 +1,6 @@
 import { inferRuleCategoryWithEvidence } from '../compiler/legalCompiler.js';
 import type { AiGateway } from '../ai/gateway.js';
+import { emitWorkspaceEvent, feedEventData, type OutboundDeps } from '../events/outbound.js';
 import type { FeedItem, ProductStore } from './store.js';
 
 /**
@@ -36,7 +37,7 @@ export interface WatchResult {
 }
 
 export async function watchRegulationFeed(
-  deps: { store: ProductStore; ai: Pick<AiGateway, 'complete'> },
+  deps: { store: ProductStore; ai: Pick<AiGateway, 'complete'>; events?: OutboundDeps },
   workspaceId: string,
   opts: { limit?: number } = {}
 ): Promise<WatchResult> {
@@ -51,11 +52,19 @@ export async function watchRegulationFeed(
   for (const item of items.slice(0, limit)) {
     const category = inferRuleCategoryWithEvidence(`${item.title}\n${item.excerpt}`);
     const affected = category ? [...new Set(rules.filter((r) => r.clause.category === category).map((r) => r.ruleKey))].sort() : [];
-    if (!notes.has(item.id)) {
+    const fresh = !notes.has(item.id);
+    if (fresh) {
       store.noteFeedItem(workspaceId, item.id, { category, affectedRuleKeys: affected });
       result.noted++;
     }
-    if (result.refused) continue;
+    // One event per item that may affect rules, when it is first noted (with its summary if one came).
+    const announce = (summary: string | null) => {
+      if (fresh && affected.length > 0 && deps.events) emitWorkspaceEvent(deps.events, workspaceId, 'regulation.watch', feedEventData(item, { affectedRuleKeys: affected, summary }));
+    };
+    if (result.refused) {
+      announce(null);
+      continue;
+    }
     const r = await ai.complete({
       workspaceId,
       task: 'regulation-watch',
@@ -71,14 +80,18 @@ export async function watchRegulationFeed(
     });
     if (r.refused) {
       result.refused = r.refused;
+      announce(null);
       continue;
     }
     if (!r.ok || !r.json) {
       result.errors.push(`${item.documentNumber}: ${r.invalid ?? r.error ?? 'no answer'}`);
+      announce(null);
       continue;
     }
-    store.noteFeedItem(workspaceId, item.id, { category, affectedRuleKeys: affected, summary: (r.json as { summary: string }).summary.trim(), model: r.model });
+    const summary = (r.json as { summary: string }).summary.trim();
+    store.noteFeedItem(workspaceId, item.id, { category, affectedRuleKeys: affected, summary, model: r.model });
     result.summarized++;
+    announce(summary);
   }
   return result;
 }
