@@ -29,6 +29,7 @@ RUN python3 -m venv /app/.venv && /app/.venv/bin/pip install --no-cache-dir -q -
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/dist-server ./dist-server
 COPY target-repo ./target-repo
+COPY integrations ./integrations
 RUN mkdir -p /app/data && chown -R node:node /app/data /app/target-repo
 
 USER node

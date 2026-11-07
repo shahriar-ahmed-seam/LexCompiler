@@ -11,6 +11,7 @@ import type { EvidenceLog, PublicKeyEntry } from '../evidence/log.js';
 import type { EvidenceRecorder } from '../evidence/records.js';
 import type { TargetRepoFile } from '../../shared/types.js';
 import type { CrewRun, CrewRunStore } from '../agents/crew.js';
+import { checkWebhookUrl, EVENT_TYPES, sendTestEvent } from '../events/outbound.js';
 import { watchRegulationFeed } from './regulationWatch.js';
 import { fetchActText, fetchUrlText, type ActTextDeps } from '../regulations/actText.js';
 import { scanLocalRepo, storeComingUp } from './repoScan.js';
@@ -136,6 +137,8 @@ export function createProductRouter(store: ProductStore, oidc: OidcProvider | nu
   const reposRoot = path.resolve(options.reposRoot);
   const ai = options.ai ?? new AiGateway(store.db);
   const publicUrl = (options.publicUrl ?? 'http://localhost:3001').replace(/\/+$/, '');
+  const testInFlight = new Set<string>();
+  const testSentAt = new Map<string, number>();
   const flows: FlowDeps = options.flows ?? { store, evidence: options.evidence, queue: null, publicUrl };
   const keysFor =
     options.keysFor ?? ((workspaceId: string) => (options.evidence ? options.evidence.log.publicKeys(workspaceId, [], new Map()) : Promise.resolve([] as PublicKeyEntry[])));
@@ -741,7 +744,7 @@ export function createProductRouter(store: ProductStore, oidc: OidcProvider | nu
     '/workspaces/:workspaceId/feed/watch',
     need('editRules'),
     handle(async (req, res) => {
-      res.json(await watchRegulationFeed({ store, ai }, wid(req), { limit: 5 }));
+      res.json(await watchRegulationFeed({ store, ai, events: flows }, wid(req), { limit: 5 }));
     })
   );
   r.post(
@@ -938,6 +941,56 @@ export function createProductRouter(store: ProductStore, oidc: OidcProvider | nu
     handle((req, res) => res.json(store.revokeApiToken(wid(req), userOf(res).id, String(req.params.tokenId), { canRevokeOthers: ownerView(req, res) })))
   );
   /** The full MCP call log: time, token, tool, repository, outcome and duration (owners). The members' activity list is /assistant-calls. */
+  // ---- Event webhook (one per workspace, owner only): scans, regulation watch and exceptions go to a URL such as an n8n workflow.
+  const webhookView = (w: NonNullable<ReturnType<typeof store.getWorkspaceWebhook>>) => ({ configured: true, url: w.url, events: w.events, createdAt: w.createdAt, updatedAt: w.updatedAt, availableEvents: EVENT_TYPES });
+  r.get(
+    '/workspaces/:workspaceId/webhook',
+    need('manageWorkspace'),
+    handle((req, res) => {
+      const w = store.getWorkspaceWebhook(wid(req));
+      res.json(w ? webhookView(w) : { configured: false, availableEvents: EVENT_TYPES });
+    })
+  );
+  r.put(
+    '/workspaces/:workspaceId/webhook',
+    need('manageWorkspace'),
+    handle(async (req, res) => {
+      const body = (req.body ?? {}) as { url?: unknown; events?: unknown; rotateSecret?: unknown };
+      if (typeof body.url !== 'string' || !body.url.trim()) throw new StoreError('url is required');
+      const events = body.events === undefined ? [...EVENT_TYPES] : body.events;
+      if (!Array.isArray(events) || events.length === 0 || events.some((e) => !(EVENT_TYPES as readonly unknown[]).includes(e))) {
+        throw new StoreError(`events must be a non-empty list of: ${EVENT_TYPES.join(', ')}`);
+      }
+      const url = body.url.trim();
+      await checkWebhookUrl(url);
+      const { webhook, newSecret } = store.setWorkspaceWebhook(wid(req), { url, events: events as string[], rotateSecret: body.rotateSecret === true, createdBy: userOf(res).id });
+      // The secret is shown once, when it is made or rotated. Receivers need it to check the signature.
+      res.status(newSecret ? 201 : 200).json({ ...webhookView(webhook), ...(newSecret ? { secret: newSecret } : {}) });
+    })
+  );
+  r.delete(
+    '/workspaces/:workspaceId/webhook',
+    need('manageWorkspace'),
+    handle((req, res) => res.json({ deleted: store.deleteWorkspaceWebhook(wid(req)) }))
+  );
+  r.post(
+    '/workspaces/:workspaceId/webhook/test',
+    need('manageWorkspace'),
+    handle(async (req, res) => {
+      if (!store.getWorkspaceWebhook(wid(req))) throw new StoreError('this workspace has no webhook yet', 409);
+      // One test at a time per workspace, and not more often than every few seconds: each holds a request open.
+      const id = wid(req);
+      if (testInFlight.has(id) || Date.now() - (testSentAt.get(id) ?? 0) < Number(process.env.LEXCOMPILER_WEBHOOK_TEST_COOLDOWN_MS ?? 5000)) throw new StoreError('a test event was just sent; wait a few seconds and try again', 429);
+      testInFlight.add(id);
+      testSentAt.set(id, Date.now());
+      try {
+        res.json(await sendTestEvent({ store, queue: null, publicUrl }, id, { message: 'This is a test event from LexCompiler.', url: publicUrl }));
+      } finally {
+        testInFlight.delete(id);
+      }
+    })
+  );
+  r.get('/workspaces/:workspaceId/webhook/deliveries', need('manageWorkspace'), (req, res) => res.json(store.listOutboundDeliveries(wid(req))));
   r.get('/workspaces/:workspaceId/mcp/calls', need('manageWorkspace'), (req, res) => res.json(store.listMcpCalls(wid(req), Number(req.query.limit) || 50)));
 
   // ---------------------------------------------------------------- scans
@@ -1021,7 +1074,7 @@ export function createProductRouter(store: ProductStore, oidc: OidcProvider | nu
       if (!repo || repo.workspaceId !== wid(req)) throw new StoreError('repository not found', 404);
       if (repo.source !== 'local' || !repo.localPath) throw new StoreError('GitHub repositories are scanned on push and pull request', 409);
       // Each rule is proven only on the paths in its scope (scanLocalRepo, Phase 6).
-      const { scan, evidence } = await scanLocalRepo({ store, evidence: options.evidence }, repo, 'manual');
+      const { scan, evidence } = await scanLocalRepo({ store, evidence: options.evidence, events: flows }, repo, 'manual');
       res.json({ ...scan, findings: store.listFindings(scan.id), evidence });
     })
   );

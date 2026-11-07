@@ -621,6 +621,37 @@ ALTER TABLE exceptions ADD COLUMN requester_label TEXT;
 ${EXCEPTION_DATA_FIXES}
 `,
   },
+  {
+    id: 18,
+    name: 'workspace event webhooks and their deliveries',
+    sql: `
+-- One outbound webhook per workspace (for example an n8n workflow). The secret signs each request.
+CREATE TABLE workspace_webhooks (
+  workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+  url TEXT NOT NULL,
+  secret TEXT NOT NULL,
+  events_json TEXT NOT NULL,
+  created_by TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+-- Each event sent to it: pending until the job delivers it or runs out of attempts.
+CREATE TABLE webhook_deliveries_out (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  event_id TEXT NOT NULL,
+  event_type TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('pending', 'delivered', 'failed')),
+  attempts INTEGER NOT NULL DEFAULT 0,
+  response_status INTEGER,
+  error TEXT,
+  created_at TEXT NOT NULL,
+  delivered_at TEXT
+);
+CREATE INDEX webhook_deliveries_out_workspace ON webhook_deliveries_out(workspace_id, created_at);
+`,
+  },
 ];
 
 /**
