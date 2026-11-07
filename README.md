@@ -289,6 +289,8 @@ A rule is enforced only after Legal approves a version of it. Each version freez
 
 Signed-in members work at `/legal`: documents and clauses, rule cards that Legal drafts and approves, and a "Changes" panel. Approving a rule rescans `main` of every GitHub repository in its scope. A version approved with a later effective date fails nothing yet; it shows under "Coming up", and pull request checks list its findings as warnings ("R-3 v2 will fail from 1 January 2027"). The panel also shows the regulation feed with "Draft rule change", and each counterparty's paths: a rule scoped to counterparties is proven only on their paths.
 
+In the Changes panel, "Fetch the act's text" on a regulation feed item stores the amended act's full text as a regulation document, straight from its official source (EUR-Lex's Cellar interface or the Federal Register API; no key needed), and opens its clauses. If `BROWSERBASE_API_KEY` is set, the upload form also offers "Import from URL" for any other public page through Browserbase Fetch; it never uses proxies, and a site that blocks automated access is reported so you can download the file and upload it instead.
+
 For a local identity provider, `npm run setup:keycloak` starts Keycloak 26 on `127.0.0.1:8080`; start the server with `--env-file=<data dir>/keycloak/oidc.env`.
 
 ### AI Features (opt-in per workspace)
@@ -436,6 +438,14 @@ Built-in clauses and curated feed items are **illustrative**: they paraphrase th
 | `POST` | `/api/enterprise/revoke` | Revokes an attestation certificate or signing key (administrators) |
 | `GET` | `/api/enterprise/revocations` | Published revocation list |
 | `GET` | `/api/enterprise/sarif` | Exports OASIS SARIF v2.1.0 static analysis report |
+
+---
+
+## n8n workflow automation
+
+A workspace owner can point the workspace at a webhook URL. LexCompiler then sends a signed JSON event when a scan completes (`scan.completed`), the regulation watch finds a notice that may affect rules (`regulation.watch`), or an exception is requested or decided (`exception.requested`, `exception.decided`). Events carry rule keys, repository, commit, file path and line, never source code. The webhook is set with `PUT /api/workspaces/:id/webhook` (the signing secret is returned once), tried with `POST .../webhook/test`, and listed with `GET .../webhook/deliveries`. Local and private addresses need `LEXCOMPILER_ALLOW_PRIVATE_WEBHOOKS=1`.
+
+`integrations/n8n/lexcompiler-events.workflow.json` is a ready n8n workflow that verifies the signature and formats each event as a message, with optional Slack and email nodes (off by default). Setup with Docker is in [integrations/n8n/README.md](integrations/n8n/README.md).
 
 ---
 

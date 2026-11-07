@@ -66,7 +66,7 @@ async function main() {
   const evidence = new EvidenceRecorder(new EvidenceLog(db, workspaceSigners(dataDir())), store);
   // Only to queue work for the running server, which polls the jobs table.
   const noop = async () => undefined;
-  const queue = new JobQueue(db, { scan: noop, github_comment: noop, pr_comment: noop, rules_changed: noop });
+  const queue = new JobQueue(db, { scan: noop, github_comment: noop, pr_comment: noop, rules_changed: noop, event_delivery: noop });
   const flows: FlowDeps = { store, gov, evidence, queue, publicUrl: process.env.LEXCOMPILER_PUBLIC_URL || 'http://localhost:3001' };
   const seedUser = store.upsertUser({ sub: 'system:seed', name: 'Demo seed' });
 

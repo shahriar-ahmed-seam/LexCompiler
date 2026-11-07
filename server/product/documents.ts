@@ -115,6 +115,9 @@ const HEADING =
 /** Wording that makes a clause an obligation or a prohibition. */
 const NORMATIVE = /\b(?:must(?:\s+not)?|shall(?:\s+not)?|is\s+prohibited|are\s+prohibited|prohibited|is\s+required|are\s+required|required\s+to|may\s+not|is\s+not\s+permitted|never)\b|অবশ্যই|করতে\s*হবে|নিষিদ্ধ|যাবে\s*না|করা\s*যাবে\s*না/giu;
 
+/** The longest clause text the rule-card routes accept (they refuse more than 20,000 characters). */
+export const MAX_CLAUSE_CHARS = 20_000;
+
 export interface DocumentClause {
   index: number;
   /** The heading number with ASCII digits ("4.2"), or null for text before the first heading. */
@@ -133,16 +136,54 @@ export interface DocumentClause {
  * lawyer sees what was skipped. Text before the first heading is a clause without a number.
  */
 export function splitClauses(text: string): DocumentClause[] {
-  const starts: Array<{ at: number; number: string }> = [];
+  const starts: Array<{ at: number; number: string; keyword: boolean }> = [];
   let offset = 0;
   for (const line of text.split('\n')) {
     const m = HEADING.exec(line);
-    if (m) starts.push({ at: offset, number: asciiDigits(m[1] ?? m[2]).replace(/\.$/, '') });
+    if (m) starts.push({ at: offset, number: asciiDigits(m[1] ?? m[2]).replace(/\.$/, ''), keyword: m[1] !== undefined });
     offset += line.length + 1;
   }
-  const parts: Array<{ start: number; end: number; number: string | null }> = [];
-  if (starts.length === 0 || starts[0].at > 0) parts.push({ start: 0, end: starts[0]?.at ?? text.length, number: null });
-  starts.forEach((s, i) => parts.push({ start: s.at, end: starts[i + 1]?.at ?? text.length, number: s.number }));
+  // Numbers stay unique: a bare "1." under a later article is "Art. 6 pt 1", a repeated heading gets "(2)".
+  const seen = new Set<string>();
+  let parent: string | null = null;
+  for (const s of starts) {
+    const base = s.number;
+    if (seen.has(base)) {
+      const qualified = !s.keyword && parent ? `Art. ${parent} pt ${base}` : base;
+      let candidate = qualified;
+      for (let k = 2; seen.has(candidate); k++) candidate = `${qualified} (${k})`;
+      s.number = candidate;
+    }
+    seen.add(s.number);
+    if (s.keyword) parent = base;
+  }
+  const whole: Array<{ start: number; end: number; number: string | null }> = [];
+  if (starts.length === 0 || starts[0].at > 0) whole.push({ start: 0, end: starts[0]?.at ?? text.length, number: null });
+  starts.forEach((s, i) => whole.push({ start: s.at, end: starts[i + 1]?.at ?? text.length, number: s.number }));
+  // A clause longer than MAX_CLAUSE_CHARS (a recital preamble, say) is cut at line breaks so each piece can be turned into a rule card.
+  const parts: typeof whole = [];
+  for (const p of whole) {
+    if (p.end - p.start <= MAX_CLAUSE_CHARS) {
+      parts.push(p);
+      continue;
+    }
+    let from = p.start;
+    let piece = 0;
+    const push = (to: number) => {
+      parts.push({ start: from, end: to, number: piece === 0 || p.number === null ? p.number : `${p.number} (part ${piece + 1})` });
+      piece++;
+      from = to;
+    };
+    let lineStart = p.start;
+    while (lineStart < p.end) {
+      const nl = text.indexOf('\n', lineStart);
+      const lineEnd = nl === -1 || nl >= p.end ? p.end : nl + 1;
+      if (lineEnd - from > MAX_CLAUSE_CHARS && lineStart > from) push(lineStart);
+      while (lineEnd - from > MAX_CLAUSE_CHARS) push(from + MAX_CLAUSE_CHARS);
+      lineStart = lineEnd;
+    }
+    if (from < p.end) push(p.end);
+  }
 
   const out: DocumentClause[] = [];
   for (const p of parts) {

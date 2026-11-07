@@ -166,7 +166,7 @@ describe('schema migrations', () => {
     opened.push(db);
     const rows = migrationRows(db);
     expect(rows.map((r) => r.id)).toEqual(MIGRATIONS.map((m) => m.id));
-    expect(LAST).toBe(17);
+    expect(LAST).toBe(18);
     expect(rows.map((r) => r.name)).toEqual(MIGRATIONS.map((m) => m.name));
     for (const c of ['password_hash', 'github_login', 'title']) expect(columns(db, 'users').has(c)).toBe(true);
     for (const c of ['plan', 'archived_at']) expect(columns(db, 'workspaces').has(c)).toBe(true);

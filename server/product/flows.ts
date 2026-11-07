@@ -1,4 +1,5 @@
 import type { EvidenceRecorder } from '../evidence/records.js';
+import { emitWorkspaceEvent, exceptionEventData } from '../events/outbound.js';
 import { exceptionPullRequests, recheckForException } from '../github/exceptions.js';
 import type { JobQueue } from '../jobs/queue.js';
 import { GovernanceStore } from './governance.js';
@@ -90,6 +91,8 @@ export async function requestExceptions(
     out.push({ ...exception, created });
     if (created) {
       fresh.push(exception);
+      // Announce before the evidence call: it is already stored, and a signer failure must not lose the event (a retry sees created=false).
+      emitWorkspaceEvent(deps, input.workspaceId, 'exception.requested', exceptionEventData(exception, deps.publicUrl));
       await deps.evidence?.exceptionRequested(exception);
     }
   }
@@ -121,6 +124,8 @@ export async function decideException(
     input.userId,
     approve ? { approve: true, note: input.note, expiresAt: input.expiresAt as string } : { approve: false, note: input.note }
   );
+  // Announce before the evidence call: the decision is stored, and a retry would be refused as already decided.
+  emitWorkspaceEvent(deps, input.workspaceId, 'exception.decided', exceptionEventData(e, deps.publicUrl));
   await deps.evidence?.exceptionChanged(e);
   const who = personName(deps, input.userId);
   let rerunJobId: string | null = null;

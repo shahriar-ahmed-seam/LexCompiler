@@ -11,7 +11,9 @@ import type { EvidenceLog, PublicKeyEntry } from '../evidence/log.js';
 import type { EvidenceRecorder } from '../evidence/records.js';
 import type { TargetRepoFile } from '../../shared/types.js';
 import type { CrewRun, CrewRunStore } from '../agents/crew.js';
+import { checkWebhookUrl, EVENT_TYPES, sendTestEvent } from '../events/outbound.js';
 import { watchRegulationFeed } from './regulationWatch.js';
+import { fetchActText, fetchUrlText, type ActTextDeps } from '../regulations/actText.js';
 import { scanLocalRepo, storeComingUp } from './repoScan.js';
 import type { RuleCategory } from '../../shared/types.js';
 import { compileClause, isRuleCategory, libraryTemplates, RULE_CATEGORIES, validateClauseValues } from './clauses.js';
@@ -95,6 +97,8 @@ export interface ProductRouterOptions {
   readRepoFiles?: (repo: Repo, commitSha: string) => Promise<TargetRepoFile[]>;
   /** Fetches the regulation feed and stores new items; returns how many were new. */
   refreshFeed?: () => Promise<number>;
+  /** Fetch and Browserbase key for "Fetch the act's text" and "Import from URL" (tests inject fetch). */
+  actText?: ActTextDeps;
   /** Opens a verified fix pull request for a GitHub repository's default branch (Phase 4). */
   openFixPr?: (repo: Repo, requestedBy: string) => Promise<{ created: boolean }>;
   /** The agent crew on a workspace repository (server/agents/workspaceCrew.ts). */
@@ -133,6 +137,8 @@ export function createProductRouter(store: ProductStore, oidc: OidcProvider | nu
   const reposRoot = path.resolve(options.reposRoot);
   const ai = options.ai ?? new AiGateway(store.db);
   const publicUrl = (options.publicUrl ?? 'http://localhost:3001').replace(/\/+$/, '');
+  const testInFlight = new Set<string>();
+  const testSentAt = new Map<string, number>();
   const flows: FlowDeps = options.flows ?? { store, evidence: options.evidence, queue: null, publicUrl };
   const keysFor =
     options.keysFor ?? ((workspaceId: string) => (options.evidence ? options.evidence.log.publicKeys(workspaceId, [], new Map()) : Promise.resolve([] as PublicKeyEntry[])));
@@ -738,7 +744,7 @@ export function createProductRouter(store: ProductStore, oidc: OidcProvider | nu
     '/workspaces/:workspaceId/feed/watch',
     need('editRules'),
     handle(async (req, res) => {
-      res.json(await watchRegulationFeed({ store, ai }, wid(req), { limit: 5 }));
+      res.json(await watchRegulationFeed({ store, ai, events: flows }, wid(req), { limit: 5 }));
     })
   );
   r.post(
@@ -767,6 +773,71 @@ export function createProductRouter(store: ProductStore, oidc: OidcProvider | nu
       req.body = { citation: `${item.source === 'EUR_LEX' ? 'EUR-Lex' : 'Federal Register'} ${item.documentNumber}`, title: item.title.slice(0, 200), ...(req.body ?? {}) };
       const created = await draftFromText(req, res, item.excerpt.trim(), documentId);
       res.status(201).json({ ...created, documentId, feedItemId: item.id });
+    })
+  );
+
+  /**
+   * "Fetch the act's text": the amended act's full text from its official source (EUR-Lex's Cellar
+   * interface or the Federal Register API), stored as a regulation document linked to the item.
+   * Idempotent: an item whose full act text was already fetched returns that document. A document
+   * linked by "Draft rule change" holds only the short feed excerpt, so it does not count; the act is
+   * then fetched and stored as its own document. Concurrent requests for one item share one fetch.
+   */
+  const fetching = new Map<string, Promise<{ id: string; created: boolean }>>();
+  r.post(
+    '/workspaces/:workspaceId/feed/:itemId/fetch-text',
+    need('editRules'),
+    handle(async (req, res) => {
+      const workspaceId = wid(req);
+      const item = store.getFeedItem(workspaceId, String(req.params.itemId));
+      if (!item) throw new StoreError('unknown feed item', 404);
+      const uploadedBy = userOf(res).id;
+      const key = `${workspaceId}\u0000${item.id}`;
+      let job = fetching.get(key);
+      if (!job) {
+        job = (async () => {
+          const known = store.findActTextDocument(workspaceId, item.id);
+          if (known) return { id: known, created: false };
+          const act = await fetchActText(item, options.actText);
+          // Re-read after the network call: another process or request may have stored it meanwhile.
+          const raced = store.findActTextDocument(workspaceId, item.id);
+          if (raced) return { id: raced, created: false };
+          const doc = store.addDocument({ workspaceId, kind: 'regulation', title: act.title, language: 'en', text: act.text, uploadedBy, fileFormat: 'official-text' });
+          store.linkDocumentToFeedItem(workspaceId, doc.id, item.id, act.sourceUrl);
+          return { id: doc.id, created: true };
+        })().finally(() => fetching.delete(key));
+        fetching.set(key, job);
+      }
+      const { id, created } = await job;
+      const doc = store.getDocument(workspaceId, id)!;
+      res.status(created ? 201 : 200).json({ ...doc, clauses: splitClauses(doc.text) });
+    })
+  );
+  /** Which optional integrations this server has (the workspace shows "Import from URL" only with Browserbase). */
+  r.get('/workspaces/:workspaceId/integrations', need('view'), (_req, res) => {
+    const key = options.actText?.browserbaseKey === undefined ? process.env.BROWSERBASE_API_KEY : options.actText.browserbaseKey;
+    res.json({ browserbase: Boolean(key) });
+  });
+  /** "Import from URL": { url, title?, kind?, counterpartyId?, language? }; a public page through Browserbase Fetch. */
+  r.post(
+    '/workspaces/:workspaceId/documents/from-url',
+    need('editRules'),
+    handle(async (req, res) => {
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const kind = String(body.kind || 'regulation');
+      if (!['contract', 'regulation', 'policy'].includes(kind)) throw new StoreError('kind must be contract, regulation or policy');
+      const page = await fetchUrlText(String(body.url || ''), options.actText);
+      const doc = store.addDocument({
+        workspaceId: wid(req),
+        counterpartyId: body.counterpartyId ? String(body.counterpartyId) : null,
+        kind: kind as 'contract' | 'regulation' | 'policy',
+        title: String(body.title || page.title),
+        language: body.language ? String(body.language).slice(0, 10) : null,
+        text: page.text,
+        uploadedBy: userOf(res).id,
+      });
+      store.linkDocumentToFeedItem(wid(req), doc.id, null, page.sourceUrl);
+      res.status(201).json({ ...store.getDocument(wid(req), doc.id), clauses: splitClauses(page.text) });
     })
   );
 
@@ -870,6 +941,56 @@ export function createProductRouter(store: ProductStore, oidc: OidcProvider | nu
     handle((req, res) => res.json(store.revokeApiToken(wid(req), userOf(res).id, String(req.params.tokenId), { canRevokeOthers: ownerView(req, res) })))
   );
   /** The full MCP call log: time, token, tool, repository, outcome and duration (owners). The members' activity list is /assistant-calls. */
+  // ---- Event webhook (one per workspace, owner only): scans, regulation watch and exceptions go to a URL such as an n8n workflow.
+  const webhookView = (w: NonNullable<ReturnType<typeof store.getWorkspaceWebhook>>) => ({ configured: true, url: w.url, events: w.events, createdAt: w.createdAt, updatedAt: w.updatedAt, availableEvents: EVENT_TYPES });
+  r.get(
+    '/workspaces/:workspaceId/webhook',
+    need('manageWorkspace'),
+    handle((req, res) => {
+      const w = store.getWorkspaceWebhook(wid(req));
+      res.json(w ? webhookView(w) : { configured: false, availableEvents: EVENT_TYPES });
+    })
+  );
+  r.put(
+    '/workspaces/:workspaceId/webhook',
+    need('manageWorkspace'),
+    handle(async (req, res) => {
+      const body = (req.body ?? {}) as { url?: unknown; events?: unknown; rotateSecret?: unknown };
+      if (typeof body.url !== 'string' || !body.url.trim()) throw new StoreError('url is required');
+      const events = body.events === undefined ? [...EVENT_TYPES] : body.events;
+      if (!Array.isArray(events) || events.length === 0 || events.some((e) => !(EVENT_TYPES as readonly unknown[]).includes(e))) {
+        throw new StoreError(`events must be a non-empty list of: ${EVENT_TYPES.join(', ')}`);
+      }
+      const url = body.url.trim();
+      await checkWebhookUrl(url);
+      const { webhook, newSecret } = store.setWorkspaceWebhook(wid(req), { url, events: events as string[], rotateSecret: body.rotateSecret === true, createdBy: userOf(res).id });
+      // The secret is shown once, when it is made or rotated. Receivers need it to check the signature.
+      res.status(newSecret ? 201 : 200).json({ ...webhookView(webhook), ...(newSecret ? { secret: newSecret } : {}) });
+    })
+  );
+  r.delete(
+    '/workspaces/:workspaceId/webhook',
+    need('manageWorkspace'),
+    handle((req, res) => res.json({ deleted: store.deleteWorkspaceWebhook(wid(req)) }))
+  );
+  r.post(
+    '/workspaces/:workspaceId/webhook/test',
+    need('manageWorkspace'),
+    handle(async (req, res) => {
+      if (!store.getWorkspaceWebhook(wid(req))) throw new StoreError('this workspace has no webhook yet', 409);
+      // One test at a time per workspace, and not more often than every few seconds: each holds a request open.
+      const id = wid(req);
+      if (testInFlight.has(id) || Date.now() - (testSentAt.get(id) ?? 0) < Number(process.env.LEXCOMPILER_WEBHOOK_TEST_COOLDOWN_MS ?? 5000)) throw new StoreError('a test event was just sent; wait a few seconds and try again', 429);
+      testInFlight.add(id);
+      testSentAt.set(id, Date.now());
+      try {
+        res.json(await sendTestEvent({ store, queue: null, publicUrl }, id, { message: 'This is a test event from LexCompiler.', url: publicUrl }));
+      } finally {
+        testInFlight.delete(id);
+      }
+    })
+  );
+  r.get('/workspaces/:workspaceId/webhook/deliveries', need('manageWorkspace'), (req, res) => res.json(store.listOutboundDeliveries(wid(req))));
   r.get('/workspaces/:workspaceId/mcp/calls', need('manageWorkspace'), (req, res) => res.json(store.listMcpCalls(wid(req), Number(req.query.limit) || 50)));
 
   // ---------------------------------------------------------------- scans
@@ -953,7 +1074,7 @@ export function createProductRouter(store: ProductStore, oidc: OidcProvider | nu
       if (!repo || repo.workspaceId !== wid(req)) throw new StoreError('repository not found', 404);
       if (repo.source !== 'local' || !repo.localPath) throw new StoreError('GitHub repositories are scanned on push and pull request', 409);
       // Each rule is proven only on the paths in its scope (scanLocalRepo, Phase 6).
-      const { scan, evidence } = await scanLocalRepo({ store, evidence: options.evidence }, repo, 'manual');
+      const { scan, evidence } = await scanLocalRepo({ store, evidence: options.evidence, events: flows }, repo, 'manual');
       res.json({ ...scan, findings: store.listFindings(scan.id), evidence });
     })
   );

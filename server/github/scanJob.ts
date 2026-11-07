@@ -1,3 +1,4 @@
+import { emitWorkspaceEvent, scanEventData, type OutboundDeps } from '../events/outbound.js';
 import type { JobHandler } from '../jobs/queue.js';
 import { storeComingUp, upcomingFindings } from '../product/repoScan.js';
 import { classifyFindings, scanFilesScoped, type RawFinding } from '../product/scanner.js';
@@ -35,6 +36,8 @@ export interface ScanJobDeps {
   evidence?: EvidenceRecorder;
   /** Model calls for AI explanations, after the check is final, when the workspace has AI on (5.5). */
   ai?: AiGateway;
+  /** Sends a `scan.completed` event to the workspace's webhook, when it has one. */
+  events?: OutboundDeps;
 }
 
 interface CommitScan {
@@ -198,6 +201,8 @@ export function createScanJobHandler(deps: ScanJobDeps): JobHandler {
       for (const batch of rest) {
         await app.request(installationId, 'PATCH', `${route}/check-runs/${run.id}`, { output: { title: output.title, summary: output.summary, annotations: batch } });
       }
+      // The check is final and its scan stored; tell the workspace's webhook (never failing the run).
+      if (deps.events) emitWorkspaceEvent(deps.events, repo.workspaceId, 'scan.completed', scanEventData(done, repo, rules, findings, deps.publicUrl));
       // AI explanations (5.5): the result above is final; they only add details to the run.
       let explanations = new Map<string, string>();
       if (p.kind === 'pull_request' && deps.ai && summary.newCount > 0) {

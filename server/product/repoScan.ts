@@ -1,4 +1,5 @@
 import { readRepositoryFilesAt } from '../analyzer/repoBaseline.js';
+import { emitWorkspaceEvent, scanEventData, type OutboundDeps } from '../events/outbound.js';
 import type { EvidenceRecorder } from '../evidence/records.js';
 import { lexcompilerVersion } from '../util/versions.js';
 import type { TargetRepoFile } from '../../shared/types.js';
@@ -24,7 +25,7 @@ export function scopedRules(store: ProductStore, repo: Repo, rules: RuleInEffect
 
 /** Scans a local repository's folder with the rules in effect, stores the scan and writes its evidence record. */
 export async function scanLocalRepo(
-  deps: { store: ProductStore; evidence?: EvidenceRecorder },
+  deps: { store: ProductStore; evidence?: EvidenceRecorder; events?: OutboundDeps },
   repo: Repo,
   trigger: ScanTrigger
 ): Promise<{ scan: ScanRecord; findings: ClassifiedFinding[]; evidence: { seq: number; headerSha256: string } | null }> {
@@ -41,6 +42,7 @@ export async function scanLocalRepo(
     const done = store.completeScan(scan.id, { conclusion: scanConclusion(summary, false), filesScanned: result.filesScanned, summary, facts: result.facts, findings });
     const evidence = (await deps.evidence?.scanCompleted(workspaceId, { scan: done, rules, findings, undecidedRuleKeys: result.undecidedRuleKeys })) ?? null;
     await storeComingUp(store, repo, 'working-tree', files);
+    if (deps.events) emitWorkspaceEvent(deps.events, workspaceId, 'scan.completed', scanEventData(done, repo, rules, findings, deps.events.publicUrl));
     return { scan: done, findings, evidence: evidence ? { seq: evidence.seq, headerSha256: evidence.headerSha256 } : null };
   } catch (err) {
     store.failScan(scan.id, err instanceof Error ? err.message : String(err));
@@ -74,6 +76,8 @@ export async function storeComingUp(store: ProductStore, repo: Repo, commitSha: 
 export interface NightlyDeps {
   store: ProductStore;
   evidence?: EvidenceRecorder;
+  /** Sends `scan.completed` for local scans. */
+  events?: OutboundDeps;
   /** Queues a default-branch scan of a GitHub repository (its job also refreshes "Coming up"). */
   enqueueGithubScan: (repo: Repo, dedupeKey: string) => string | null;
 }
