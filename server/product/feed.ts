@@ -42,7 +42,7 @@ export async function runDueJobs(
     backup?: { dataDir: string; backupDir: string; keep?: number };
     /** RFC 3161 Time-Stamp Authority for the newest evidence header of each workspace (LEXCOMPILER_TSA_URL). */
     timestamps?: { tsaUrl: string; fetchImpl?: typeof fetch };
-    /** Regulation watch after the feed refresh, in workspaces whose AI is on. */
+    /** Regulation watch after the feed refresh, in every workspace (with AI off it notes and announces items but writes no summary). */
     ai?: AiGateway;
   },
   now: Date = new Date()
@@ -71,9 +71,9 @@ export async function runDueJobs(
     if (deps.ai) {
       let summarized = 0;
       for (const ws of deps.store.listWorkspaces()) {
-        if (deps.ai.settings(ws.id).mode === 'off') continue;
+        // AI off still notes items and announces them (the gateway refuses the summary call); only the summary is skipped.
         try {
-          summarized += (await watchRegulationFeed({ store: deps.store, ai: deps.ai }, ws.id)).summarized;
+          summarized += (await watchRegulationFeed({ store: deps.store, ai: deps.ai, events: deps.events }, ws.id)).summarized;
         } catch (err) {
           console.error(`[regulation watch] ${ws.name}: ${err instanceof Error ? err.message : String(err)}`);
         }

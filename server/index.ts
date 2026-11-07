@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import { externalClient, probeExternalMcpServers } from './mcp/externalClients.js';
 import { getAttestationSigner, revocations, revoke, trustedKeys } from './enterprise/attestationSigner.js';
 import { verifyTimestamp } from './enterprise/timestamp.js';
@@ -19,6 +20,7 @@ import { createBrowserAuth, createGitHubApiRouter, createGitHubRoutes } from './
 import { createScanJobHandler } from './github/scanJob.js';
 import { createCommentJobHandler } from './github/exceptions.js';
 import { createWebhookHandler, enqueueScan } from './github/webhooks.js';
+import { createEventDeliveryHandler, EVENT_JOB_KIND } from './events/outbound.js';
 import { JobQueue } from './jobs/queue.js';
 import path from 'node:path';
 import cors from 'cors';
@@ -192,7 +194,8 @@ const flowDeps: FlowDeps = { store: productStore, gov: governance, evidence, que
 const jobQueue: JobQueue = new JobQueue(
   getDb(),
   {
-    scan: createScanJobHandler({ store: productStore, getApp: getGitHubApp, publicUrl, evidence, ai: new AiGateway(getDb()) }),
+    scan: createScanJobHandler({ store: productStore, getApp: getGitHubApp, publicUrl, evidence, ai: new AiGateway(getDb()), events: { store: productStore, queue: () => jobQueue, publicUrl } }),
+    [EVENT_JOB_KIND]: createEventDeliveryHandler({ store: productStore }),
     github_comment: commentJob,
     pr_comment: commentJob,
     ...createGovernanceJobHandlers({ store: productStore, getApp: getGitHubApp, queue: () => jobQueue }),
@@ -313,8 +316,9 @@ if (process.env.LEXCOMPILER_SCHEDULER !== 'off') {
       backup: process.env.LEXCOMPILER_BACKUP_DIR ? { dataDir: dataDir(), backupDir: path.resolve(process.env.LEXCOMPILER_BACKUP_DIR) } : undefined,
       // LEXCOMPILER_TSA_URL: an RFC 3161 Time-Stamp Authority vouches daily for each workspace's newest evidence header.
       timestamps: process.env.LEXCOMPILER_TSA_URL ? { tsaUrl: process.env.LEXCOMPILER_TSA_URL } : undefined,
-      // Regulation watch after the feed refresh, in workspaces whose AI is on.
+      // Regulation watch after the feed refresh, in every workspace (with AI off it notes and announces items but writes no summary).
       ai: getAiGateway(),
+      events: flowDeps,
       enqueueGithubScan: (repo, dedupeKey) =>
         repo.githubRepoId !== null && repo.installationId !== null
           ? enqueueScan({ queue: jobQueue }, { githubRepoId: repo.githubRepoId, installationId: repo.installationId, kind: 'push', trigger: 'scheduled' }, dedupeKey)
@@ -661,54 +665,13 @@ app.post('/api/optimization/compress', async (req, res) => {
   }
 });
 
+/** The n8n workflow that receives workspace event webhooks (integrations/n8n/README.md), importable as it is. */
 app.get('/api/workflows/n8n-export', (_req, res) => {
-  res.json({
-    name: 'LexCompiler Autonomous Regulatory Horizon-to-PR Pipeline (n8n)',
-    nodes: [
-      {
-        id: '1',
-        name: 'EUR-Lex & Federal Register Webhook / Cron Trigger',
-        type: 'n8n-nodes-base.scheduleTrigger',
-        parameters: { interval: '15m' },
-      },
-      {
-        id: '2',
-        name: 'MCP Tool: lex-statute-ingest-mcp',
-        type: '@n8n/n8n-nodes-langchain.mcpClientTool',
-        parameters: {
-          serverUrl: 'http://localhost:3001/api/mcp/lex-statute-ingest-mcp/rpc',
-          toolName: 'fetch_live_regulatory_feed',
-        },
-      },
-      {
-        id: '3',
-        name: 'MCP Tool: lex-deontic-compiler-mcp',
-        type: '@n8n/n8n-nodes-langchain.mcpClientTool',
-        parameters: {
-          serverUrl: 'http://localhost:3001/api/mcp/lex-deontic-compiler-mcp/rpc',
-          toolName: 'compile_prose_to_smt_and_rego',
-        },
-      },
-      {
-        id: '4',
-        name: 'MCP Tool: lex-z3-prover-mcp (Microsoft Z3 Formal Check)',
-        type: '@n8n/n8n-nodes-langchain.mcpClientTool',
-        parameters: {
-          serverUrl: 'http://localhost:3001/api/mcp/lex-z3-prover-mcp/rpc',
-          toolName: 'prove_repository_compliance_z3',
-        },
-      },
-      {
-        id: '5',
-        name: 'MCP Tool: lex-remediation-pr-mcp (Z3-gated fix bundle)',
-        type: '@n8n/n8n-nodes-langchain.mcpClientTool',
-        parameters: {
-          serverUrl: 'http://localhost:3001/api/mcp/lex-remediation-pr-mcp/rpc',
-          toolName: 'synthesize_and_verify_remediation_pr',
-        },
-      },
-    ],
-  });
+  try {
+    res.json(JSON.parse(fs.readFileSync(path.join(process.cwd(), 'integrations', 'n8n', 'lexcompiler-events.workflow.json'), 'utf8')));
+  } catch (err) {
+    sendError(res, err);
+  }
 });
 
 /**
