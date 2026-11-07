@@ -694,6 +694,8 @@ export class ProductStore {
     supersedesId?: string | null;
     /** The uploaded file; without one, the text is the document and its hash is the text's. */
     file?: { name: string; format: string; data: Buffer; sha256: string };
+    /** Marks a document made without a file (default "text"); the full act text fetched from an official source is "official-text". */
+    fileFormat?: string;
   }): { id: string; fileSha256: string } {
     const id = newId();
     const fileSha256 = input.file?.sha256 ?? sha256Hex(input.text);
@@ -717,7 +719,7 @@ export class ProductStore {
         input.uploadedBy,
         nowIso(),
         input.file?.name.slice(0, 200) ?? null,
-        input.file?.format ?? 'text',
+        input.file?.format ?? input.fileFormat ?? 'text',
         input.file?.data ?? null
       );
     return { id, fileSha256 };
@@ -1500,8 +1502,16 @@ export class ProductStore {
     return this.listFeedItems(workspaceId, 500).find((i) => i.id === id);
   }
 
-  /** Links a document to the feed item it was made from. */
-  linkDocumentToFeedItem(workspaceId: string, documentId: string, feedItemId: string, sourceUrl: string | null): void {
+  /** The document holding the full act text fetched for a feed item (not a short "Draft rule change" excerpt), newest first. */
+  findActTextDocument(workspaceId: string, feedItemId: string): string | null {
+    const r = this.db
+      .prepare("SELECT id FROM documents WHERE workspace_id = ? AND feed_item_id = ? AND file_format = 'official-text' ORDER BY uploaded_at DESC, rowid DESC LIMIT 1")
+      .get(workspaceId, feedItemId) as Row | undefined;
+    return r ? String(r.id) : null;
+  }
+
+  /** Links a document to the feed item it was made from (or, with no item, to the page it was imported from). */
+  linkDocumentToFeedItem(workspaceId: string, documentId: string, feedItemId: string | null, sourceUrl: string | null): void {
     this.db.prepare('UPDATE documents SET feed_item_id = ?, source_url = ? WHERE id = ? AND workspace_id = ?').run(feedItemId, sourceUrl, documentId, workspaceId);
   }
 

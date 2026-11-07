@@ -289,6 +289,8 @@ A rule is enforced only after Legal approves a version of it. Each version freez
 
 Signed-in members work at `/legal`: documents and clauses, rule cards that Legal drafts and approves, and a "Changes" panel. Approving a rule rescans `main` of every GitHub repository in its scope. A version approved with a later effective date fails nothing yet; it shows under "Coming up", and pull request checks list its findings as warnings ("R-3 v2 will fail from 1 January 2027"). The panel also shows the regulation feed with "Draft rule change", and each counterparty's paths: a rule scoped to counterparties is proven only on their paths.
 
+In the Changes panel, "Fetch the act's text" on a regulation feed item stores the amended act's full text as a regulation document, straight from its official source (EUR-Lex's Cellar interface or the Federal Register API; no key needed), and opens its clauses. If `BROWSERBASE_API_KEY` is set, the upload form also offers "Import from URL" for any other public page through Browserbase Fetch; it never uses proxies, and a site that blocks automated access is reported so you can download the file and upload it instead.
+
 For a local identity provider, `npm run setup:keycloak` starts Keycloak 26 on `127.0.0.1:8080`; start the server with `--env-file=<data dir>/keycloak/oidc.env`.
 
 ### AI Features (opt-in per workspace)

@@ -81,7 +81,7 @@ function ScopeEditor({ cp, repos, busy, onSave }: { cp: Counterparty; repos: Rep
   );
 }
 
-export function ChangesPanel({ base, canEdit, canOpenFixes = false, onChanged }: { base: string; canEdit: boolean; canOpenFixes?: boolean; onChanged: () => Promise<void> }) {
+export function ChangesPanel({ base, canEdit, canOpenFixes = false, onChanged, onOpenDocument }: { base: string; canEdit: boolean; canOpenFixes?: boolean; onChanged: () => Promise<void>; onOpenDocument?: (documentId: string) => Promise<void> | void }) {
   const [fixPr, setFixPr] = useState<{ repo: string; prNumber: number; url: string; created: boolean } | null>(null);
   const [comingUp, setComingUp] = useState<ComingUpResult[]>([]);
   const [feed, setFeed] = useState<FeedItem[]>([]);
@@ -123,6 +123,15 @@ export function ChangesPanel({ base, canEdit, canOpenFixes = false, onChanged }:
       await refresh();
       await onChanged();
       setMessage({ kind: 'ok', text: `${r.rule.key} v${r.version.version} drafted from ${item.documentNumber}. Nothing takes effect until it is approved.` });
+    });
+  /** The amended act's full text from its official source, stored as a document and opened. */
+  const fetchText = (item: FeedItem) =>
+    run(async () => {
+      const doc = await api<{ id: string }>(`${base}/feed/${encodeURIComponent(item.id)}/fetch-text`, {});
+      await refresh();
+      await onChanged();
+      await onOpenDocument?.(doc.id);
+      setMessage({ kind: 'ok', text: `The text of ${item.documentNumber} is now a document; its clauses are open.` });
     });
   /** One verified commit fixing the default branch; LexCompiler refuses a fix Z3 doesn't prove. */
   const openFix = (repo: Repo) =>
@@ -250,7 +259,14 @@ export function ChangesPanel({ base, canEdit, canOpenFixes = false, onChanged }:
                 </p>
               )}
               {item.kind === 'CHANGE_NOTICE' ? (
-                <p className="text-xs text-zinc-400">Change notice: open the amended act and upload its new text.</p>
+                <>
+                  <p className="text-xs text-zinc-400">Change notice: open the amended act and upload its new text.</p>
+                  {canEdit && (
+                    <button type="button" disabled={busy} onClick={() => void fetchText(item)} className="rounded bg-sky-700 hover:bg-sky-800 text-white px-2 py-0.5 text-xs disabled:opacity-50">
+                      {item.documentId ? `Open the text of ${item.documentNumber}` : `Fetch the act's text for ${item.documentNumber}`}
+                    </button>
+                  )}
+                </>
               ) : item.documentId ? (
                 <p className="text-xs text-emerald-400">Drafted as a rule.</p>
               ) : (
