@@ -134,6 +134,8 @@ export function createProductRouter(store: ProductStore, oidc: OidcProvider | nu
   const reposRoot = path.resolve(options.reposRoot);
   const ai = options.ai ?? new AiGateway(store.db);
   const publicUrl = (options.publicUrl ?? 'http://localhost:3001').replace(/\/+$/, '');
+  const testInFlight = new Set<string>();
+  const testSentAt = new Map<string, number>();
   const flows: FlowDeps = options.flows ?? { store, evidence: options.evidence, queue: null, publicUrl };
   const keysFor =
     options.keysFor ?? ((workspaceId: string) => (options.evidence ? options.evidence.log.publicKeys(workspaceId, [], new Map()) : Promise.resolve([] as PublicKeyEntry[])));
@@ -908,7 +910,16 @@ export function createProductRouter(store: ProductStore, oidc: OidcProvider | nu
     need('manageWorkspace'),
     handle(async (req, res) => {
       if (!store.getWorkspaceWebhook(wid(req))) throw new StoreError('this workspace has no webhook yet', 409);
-      res.json(await sendTestEvent({ store, queue: null, publicUrl }, wid(req), { message: 'This is a test event from LexCompiler.', url: publicUrl }));
+      // One test at a time per workspace, and not more often than every few seconds: each holds a request open.
+      const id = wid(req);
+      if (testInFlight.has(id) || Date.now() - (testSentAt.get(id) ?? 0) < Number(process.env.LEXCOMPILER_WEBHOOK_TEST_COOLDOWN_MS ?? 5000)) throw new StoreError('a test event was just sent; wait a few seconds and try again', 429);
+      testInFlight.add(id);
+      testSentAt.set(id, Date.now());
+      try {
+        res.json(await sendTestEvent({ store, queue: null, publicUrl }, id, { message: 'This is a test event from LexCompiler.', url: publicUrl }));
+      } finally {
+        testInFlight.delete(id);
+      }
     })
   );
   r.get('/workspaces/:workspaceId/webhook/deliveries', need('manageWorkspace'), (req, res) => res.json(store.listOutboundDeliveries(wid(req))));

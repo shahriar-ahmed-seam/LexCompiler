@@ -33,6 +33,7 @@ let replyStatus = 200;
 
 beforeAll(async () => {
   process.env[PRIVATE_ENV] = '1';
+  process.env.LEXCOMPILER_WEBHOOK_TEST_COOLDOWN_MS = '0';
   store = new ProductStore(openDatabase(path.join(dataDir, 'lexcompiler.db')));
   const owner = store.upsertUser({ sub: 'arif', email: 'arif@example.test', emailVerified: true });
   workspaceId = store.createWorkspace('FinHealth AI', owner.id).id;
@@ -225,6 +226,46 @@ describe('delivery against the current configuration', () => {
     expect(store.listOutboundDeliveries(ws)[0]).toMatchObject({ status: 'failed', attempts: 2 });
   });
 
+  it('tries at most three addresses of a host', async () => {
+    const dead = http.createServer();
+    await new Promise<void>((r) => dead.listen(0, '127.0.0.1', r));
+    const deadPort = (dead.address() as AddressInfo).port;
+    await new Promise((r) => dead.close(r));
+    const lookup = async () => ['127.0.0.1', '127.0.0.2', '127.0.0.3', '127.0.0.4', '127.0.0.5'];
+    const { ws, queue, deps } = setup(['scan.completed'], `http://example.test:${deadPort}/x`, { lookup, maxAttempts: 1 });
+    emitWorkspaceEvent(deps, ws, 'scan.completed', {});
+    await queue.runOnce();
+    expect(store.listOutboundDeliveries(ws)[0].error?.split('; ')).toHaveLength(3);
+  });
+
+  it('retries when DNS fails for a passing reason, and gives up at once for a host that does not exist', async () => {
+    const failWith = (code: string) => async () => {
+      throw Object.assign(new Error(code), { code });
+    };
+    const transient = setup(['scan.completed'], 'https://hooks.example.test/x', { lookup: failWith('EAI_AGAIN'), maxAttempts: 3 });
+    emitWorkspaceEvent(transient.deps, transient.ws, 'scan.completed', {});
+    await transient.queue.runOnce();
+    expect(store.listOutboundDeliveries(transient.ws)[0]).toMatchObject({ status: 'pending', attempts: 1 });
+    expect(store.listOutboundDeliveries(transient.ws)[0].error).toMatch(/DNS/);
+
+    const missing = setup(['scan.completed'], 'https://nope.example.test/x', { lookup: failWith('ENOTFOUND'), maxAttempts: 3 });
+    emitWorkspaceEvent(missing.deps, missing.ws, 'scan.completed', {});
+    await missing.queue.runOnce();
+    expect(store.listOutboundDeliveries(missing.ws)[0]).toMatchObject({ status: 'failed', attempts: 1 });
+  });
+
+  it('answers a second test event within the cooldown with 429', async () => {
+    const own = store.createWorkspace('cooldown', store.upsertUser({ sub: 'arif', email: 'arif@example.test', emailVerified: true }).id).id;
+    process.env.LEXCOMPILER_WEBHOOK_TEST_COOLDOWN_MS = '60000';
+    try {
+      await call('PUT', `/workspaces/${own}/webhook`, 'arif', { url: receiverUrl, events: ['scan.completed'] });
+      expect((await call('POST', `/workspaces/${own}/webhook/test`, 'arif')).status).toBe(200);
+      expect((await call('POST', `/workspaces/${own}/webhook/test`, 'arif')).status).toBe(429);
+    } finally {
+      process.env.LEXCOMPILER_WEBHOOK_TEST_COOLDOWN_MS = '0';
+    }
+  });
+
   it('uses the URL and secret current at delivery time, and clears the old error', async () => {
     const dead = http.createServer();
     await new Promise<void>((r) => dead.listen(0, '127.0.0.1', r));
@@ -302,8 +343,8 @@ describe('webhook URL guard', () => {
   });
 
   it('recognises private ranges', () => {
-    for (const a of ['127.0.0.1', '10.255.0.1', '172.31.9.9', '192.168.0.1', '169.254.1.1', '0.0.0.0', '100.64.0.1', '::1', '::', 'fe80::1', 'fd12::1', '::ffff:7f00:1']) expect(isPrivateAddress(a), a).toBe(true);
-    for (const a of ['8.8.8.8', '172.32.0.1', '93.184.216.34', '2606:4700::1111']) expect(isPrivateAddress(a), a).toBe(false);
+    for (const a of ['127.0.0.1', '10.255.0.1', '172.31.9.9', '192.168.0.1', '169.254.1.1', '0.0.0.0', '100.64.0.1', '::1', '::', 'fe80::1', 'fd12::1', '::ffff:7f00:1', '64:ff9b::a9fe:a9fe', '64:ff9b::7f00:1', '64:ff9b:1::1', '::7f00:1', '2002:7f00:1::', '2002:a9fe:a9fe::1', 'fec0::1', 'ff02::1', '::ffff:127.0.0.1', '198.18.0.1', '192.0.0.5', '224.0.0.1', '255.255.255.255']) expect(isPrivateAddress(a), a).toBe(true);
+    for (const a of ['8.8.8.8', '172.32.0.1', '93.184.216.34', '2606:4700::1111', '64:ff9b::808:808', '2002:808:808::1', '2001:db8::1']) expect(isPrivateAddress(a), a).toBe(false);
   });
 });
 

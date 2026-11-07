@@ -91,8 +91,9 @@ export async function requestExceptions(
     out.push({ ...exception, created });
     if (created) {
       fresh.push(exception);
-      await deps.evidence?.exceptionRequested(exception);
+      // Announce before the evidence call: it is already stored, and a signer failure must not lose the event (a retry sees created=false).
       emitWorkspaceEvent(deps, input.workspaceId, 'exception.requested', exceptionEventData(exception, deps.publicUrl));
+      await deps.evidence?.exceptionRequested(exception);
     }
   }
   const byPr = new Map<string, ExceptionRecord[]>();
@@ -123,8 +124,9 @@ export async function decideException(
     input.userId,
     approve ? { approve: true, note: input.note, expiresAt: input.expiresAt as string } : { approve: false, note: input.note }
   );
-  await deps.evidence?.exceptionChanged(e);
+  // Announce before the evidence call: the decision is stored, and a retry would be refused as already decided.
   emitWorkspaceEvent(deps, input.workspaceId, 'exception.decided', exceptionEventData(e, deps.publicUrl));
+  await deps.evidence?.exceptionChanged(e);
   const who = personName(deps, input.userId);
   let rerunJobId: string | null = null;
   if (approve) {

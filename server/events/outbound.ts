@@ -20,7 +20,10 @@ export type WorkspaceEventType = (typeof EVENT_TYPES)[number];
 export const TEST_EVENT = 'webhook.test';
 
 export const EVENT_JOB_KIND = 'event_delivery';
+/** One delivery (all addresses together) never holds the shared job worker longer than this. */
 const TIMEOUT_MS = 10_000;
+/** At most this many of a host's addresses are tried. */
+const MAX_ADDRESSES = 3;
 /** Errors that mean "could not connect to this address"; the next address is tried. */
 const CONNECT_ERRORS = new Set(['ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH', 'ETIMEDOUT', 'EADDRNOTAVAIL']);
 const MAX_FINDINGS = 20;
@@ -50,29 +53,66 @@ export interface EventEnvelope {
 
 const defaultLookup: Lookup = async (hostname) => (await dns.lookup(hostname, { all: true, verbatim: true })).map((a) => a.address);
 
+/** DNS failed in a way that may pass (resolver timeout, SERVFAIL): the delivery is retried, not dropped. */
+export class TransientLookupError extends StoreError {
+  constructor(message: string) {
+    super(message, 503);
+  }
+}
+
 function ipv4Private(ip: string): boolean {
-  const [a, b] = ip.split('.').map(Number);
+  const [a, b, c] = ip.split('.').map(Number);
   return (
-    a === 0 || a === 10 || a === 127 || (a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168)
+    a === 0 ||
+    a === 10 ||
+    a === 127 ||
+    (a === 100 && b >= 64 && b <= 127) ||
+    (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    (a === 192 && b === 0 && c === 0) ||
+    (a === 198 && (b === 18 || b === 19)) ||
+    a >= 224 // multicast, reserved and broadcast
   );
 }
+
+/** The eight 16-bit groups of an IPv6 address (any notation, including an embedded dotted IPv4). */
+function ipv6Groups(ip: string): number[] | null {
+  let text = ip;
+  const tail = /(\d+\.\d+\.\d+\.\d+)$/.exec(text);
+  if (tail) {
+    const o = tail[1].split('.').map(Number);
+    text = text.slice(0, -tail[1].length) + ((o[0] << 8) | o[1]).toString(16) + ':' + ((o[2] << 8) | o[3]).toString(16);
+  }
+  const halves = text.split('::');
+  if (halves.length > 2) return null;
+  const head = halves[0] ? halves[0].split(':') : [];
+  const rest = halves.length === 2 && halves[1] ? halves[1].split(':') : [];
+  const fill = halves.length === 2 ? 8 - head.length - rest.length : 0;
+  if (fill < 0 || (halves.length === 1 && head.length !== 8)) return null;
+  const groups = [...head, ...Array<string>(fill).fill('0'), ...rest].map((g) => parseInt(g, 16));
+  return groups.length === 8 && groups.every((g) => Number.isInteger(g) && g >= 0 && g <= 0xffff) ? groups : null;
+}
+
+const v4Of = (hi: number, lo: number) => `${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`;
 
 /** Loopback, private, link-local, unspecified or carrier-grade NAT addresses, IPv4 or IPv6. */
 export function isPrivateAddress(address: string): boolean {
   const ip = address.replace(/^\[|\]$/g, '').split('%')[0].toLowerCase();
   if (net.isIPv4(ip)) return ipv4Private(ip);
   if (!net.isIPv6(ip)) return true; // not an address we can reason about: treat as internal
-  const dotted = /^::(?:ffff:)?(\d+\.\d+\.\d+\.\d+)$/.exec(ip);
-  if (dotted) return ipv4Private(dotted[1]);
-  const hex = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(ip);
-  if (hex) {
-    const hi = parseInt(hex[1], 16);
-    const lo = parseInt(hex[2], 16);
-    return ipv4Private(`${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`);
-  }
-  if (ip === '::' || ip === '::1') return true;
-  const first = parseInt(ip.split(':')[0] || '0', 16);
-  return (first & 0xfe00) === 0xfc00 || (first & 0xffc0) === 0xfe80;
+  const g = ipv6Groups(ip);
+  if (!g) return true;
+  const [g0, g1, g2, g3, g4, g5, g6, g7] = g;
+  // :: , ::1 and the IPv4-compatible ::a.b.c.d (the whole ::/96 block)
+  if (g0 === 0 && g1 === 0 && g2 === 0 && g3 === 0 && g4 === 0 && g5 === 0) return true;
+  // IPv4-mapped ::ffff:a.b.c.d
+  if (g0 === 0 && g1 === 0 && g2 === 0 && g3 === 0 && g4 === 0 && g5 === 0xffff) return ipv4Private(v4Of(g6, g7));
+  // NAT64 64:ff9b::/96 (embedded IPv4 checked) and the local-use 64:ff9b:1::/48
+  if (g0 === 0x64 && g1 === 0xff9b) return g2 === 0 && g3 === 0 && g4 === 0 && g5 === 0 ? ipv4Private(v4Of(g6, g7)) : g2 === 1;
+  // 6to4 2002::/16 embeds an IPv4 address in the next 32 bits
+  if (g0 === 0x2002) return ipv4Private(v4Of(g1, g2));
+  return (g0 & 0xfe00) === 0xfc00 || (g0 & 0xffc0) === 0xfe80 || (g0 & 0xffc0) === 0xfec0 || (g0 & 0xff00) === 0xff00;
 }
 
 /**
@@ -91,7 +131,18 @@ export async function checkWebhookUrl(raw: string, options: { env?: NodeJS.Proce
   if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new StoreError('the webhook URL must be http or https');
   if (url.username || url.password) throw new StoreError('the webhook URL must not contain a user name or password');
   const host = url.hostname.replace(/^\[|\]$/g, '');
-  const addresses = net.isIP(host) ? [host] : await (options.lookup ?? defaultLookup)(host).catch(() => [] as string[]);
+  let addresses: string[];
+  if (net.isIP(host)) addresses = [host];
+  else {
+    try {
+      addresses = await (options.lookup ?? defaultLookup)(host);
+    } catch (err) {
+      // "No such host" will not change on a retry; a resolver timeout or SERVFAIL may.
+      const code = (err as NodeJS.ErrnoException)?.code;
+      if (code === 'ENOTFOUND' || code === 'ENODATA') addresses = [];
+      else throw new TransientLookupError('the webhook host could not be resolved right now (DNS error), will retry');
+    }
+  }
   if (addresses.length === 0) throw new StoreError('the webhook host could not be resolved');
   const allowPrivate = (options.env ?? process.env).LEXCOMPILER_ALLOW_PRIVATE_WEBHOOKS === '1';
   if (addresses.some(isPrivateAddress) && !allowPrivate) {
@@ -118,7 +169,7 @@ interface SendResult {
 }
 
 /** One POST, connecting to an address that was just checked, so DNS cannot change between the check and the send. */
-function post(url: URL, address: string, headers: Record<string, string>, body: string): Promise<SendResult> {
+function post(url: URL, address: string, headers: Record<string, string>, body: string, timeoutMs: number): Promise<SendResult> {
   return new Promise((resolve) => {
     const family = net.isIPv6(address) ? 6 : 4;
     const req = (url.protocol === 'https:' ? https : http).request(url, {
@@ -131,7 +182,7 @@ function post(url: URL, address: string, headers: Record<string, string>, body: 
       if (!socket.connecting) connected = true;
       else socket.once('connect', () => (connected = true));
     });
-    const timer = setTimeout(() => req.destroy(Object.assign(new Error(`no answer within ${TIMEOUT_MS / 1000} seconds`), { code: connected ? 'ETIMEDOUT_RESPONSE' : 'ETIMEDOUT' })), TIMEOUT_MS);
+    const timer = setTimeout(() => req.destroy(Object.assign(new Error(`no answer within ${Math.ceil(timeoutMs / 1000)} seconds`), { code: connected ? 'ETIMEDOUT_RESPONSE' : 'ETIMEDOUT' })), timeoutMs);
     req.on('response', (res) => {
       res.resume();
       res.on('end', () => {
@@ -151,10 +202,13 @@ function post(url: URL, address: string, headers: Record<string, string>, body: 
 
 /** Tries the checked addresses in order (IPv4 first), moving on only when a connection could not be made. */
 async function postToAny(url: URL, addresses: string[], headers: Record<string, string>, body: string): Promise<SendResult> {
-  const ordered = [...addresses.filter((a) => !net.isIPv6(a)), ...addresses.filter((a) => net.isIPv6(a))];
+  const ordered = [...addresses.filter((a) => !net.isIPv6(a)), ...addresses.filter((a) => net.isIPv6(a))].slice(0, MAX_ADDRESSES);
   const errors: string[] = [];
+  const deadline = Date.now() + TIMEOUT_MS;
   for (const address of ordered) {
-    const result = await post(url, address, headers, body);
+    const left = deadline - Date.now();
+    if (left <= 0) break;
+    const result = await post(url, address, headers, body, left);
     if (!result.connectFailed) return result;
     errors.push(result.error ?? 'connection failed');
   }
@@ -173,7 +227,8 @@ async function send(deps: Pick<OutboundDeps, 'store' | 'lookup' | 'env'>, event:
   try {
     target = await checkWebhookUrl(webhook.url, { env: deps.env, lookup: deps.lookup });
   } catch (err) {
-    return { ok: false, status: null, error: err instanceof Error ? err.message : String(err), permanent: true };
+    // Only a refused address is permanent; a DNS hiccup is retried by the queue.
+    return { ok: false, status: null, error: err instanceof Error ? err.message : String(err), permanent: !(err instanceof TransientLookupError) };
   }
   const body = JSON.stringify(event);
   return postToAny(

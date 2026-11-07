@@ -1483,7 +1483,9 @@ export class ProductStore {
   }
 
   /** Stores (or updates) regulation watch's note; a later summary keeps the earlier rule match's row. */
-  noteFeedItem(workspaceId: string, feedItemId: string, note: { category: string | null; affectedRuleKeys: string[]; summary?: string; model?: string }): void {
+  /** Stores the note. Returns true when this call created it (the item was not noted before), decided in one synchronous step so two runs cannot both win. */
+  noteFeedItem(workspaceId: string, feedItemId: string, note: { category: string | null; affectedRuleKeys: string[]; summary?: string; model?: string }): boolean {
+    const existed = this.db.prepare('SELECT 1 FROM feed_item_notes WHERE workspace_id = ? AND feed_item_id = ?').get(workspaceId, feedItemId) !== undefined;
     this.db
       .prepare(
         `INSERT INTO feed_item_notes (workspace_id, feed_item_id, category, affected_rule_keys_json, summary, model, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -1491,6 +1493,7 @@ export class ProductStore {
            summary = COALESCE(excluded.summary, feed_item_notes.summary), model = COALESCE(excluded.model, feed_item_notes.model), updated_at = excluded.updated_at`
       )
       .run(workspaceId, feedItemId, note.category, JSON.stringify(note.affectedRuleKeys), note.summary ?? null, note.model ?? null, nowIso());
+    return !existed;
   }
 
   getFeedItem(workspaceId: string, id: string): FeedItem | undefined {

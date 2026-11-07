@@ -28,8 +28,8 @@ Events never contain source code, snippets or secrets. A receiver that answers a
 the event again (the job queue retries with backoff); after the last attempt the delivery shows as
 `failed` in `GET /api/workspaces/<id>/webhook/deliveries`.
 
-In the workflow, a `scan.completed` event is passed on only when it has new findings or the check
-failed; clean scans are acknowledged and dropped.
+In the workflow, a `scan.completed` event is passed on only when it has new findings, the check
+failed, or the check needs a decision (`action_required`); clean scans are acknowledged and dropped.
 
 ## Run n8n locally with Docker
 

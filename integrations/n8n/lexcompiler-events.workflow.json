@@ -101,7 +101,7 @@
                 "conditions": [
                   {
                     "id": "00000000-0000-4000-8000-0000000000201",
-                    "leftValue": "={{ $json.event.type === 'scan.completed' && ($json.event.data.counts.new > 0 || $json.event.data.conclusion === 'failure') }}",
+                    "leftValue": "={{ $json.event.type === 'scan.completed' && ($json.event.data.counts.new > 0 || ['failure', 'action_required'].includes($json.event.data.conclusion)) }}",
                     "rightValue": "",
                     "operator": {
                       "type": "boolean",

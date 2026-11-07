@@ -52,11 +52,10 @@ export async function watchRegulationFeed(
   for (const item of items.slice(0, limit)) {
     const category = inferRuleCategoryWithEvidence(`${item.title}\n${item.excerpt}`);
     const affected = category ? [...new Set(rules.filter((r) => r.clause.category === category).map((r) => r.ruleKey))].sort() : [];
-    const fresh = !notes.has(item.id);
-    if (fresh) {
-      store.noteFeedItem(workspaceId, item.id, { category, affectedRuleKeys: affected });
-      result.noted++;
-    }
+    // The snapshot above can be stale after a model call (another run may have noted the item), so
+    // the store decides who noted it first; only that run announces it.
+    const fresh = !notes.has(item.id) && store.noteFeedItem(workspaceId, item.id, { category, affectedRuleKeys: affected });
+    if (fresh) result.noted++;
     // One event per item that may affect rules, when it is first noted (with its summary if one came).
     const announce = (summary: string | null) => {
       if (fresh && affected.length > 0 && deps.events) emitWorkspaceEvent(deps.events, workspaceId, 'regulation.watch', feedEventData(item, { affectedRuleKeys: affected, summary }));

@@ -4,6 +4,7 @@ import { getInitialClauses } from './compiler/legalCompiler.js';
 import { openDatabase } from './db/index.js';
 import { compileClauseSync } from './product/clauses.js';
 import { runDueJobs } from './product/feed.js';
+import type { JobQueue } from './jobs/queue.js';
 import { watchRegulationFeed } from './product/regulationWatch.js';
 import { ProductStore } from './product/store.js';
 
@@ -51,6 +52,14 @@ function fakeAi(answer: (req: CompleteRequest) => Partial<CompleteResult> = () =
   return { ai, calls };
 }
 
+/** Events go to a webhook; a stub queue records what would be delivered. */
+function withWebhook(store: ProductStore, ws: string) {
+  store.setWorkspaceWebhook(ws, { url: 'https://hooks.example.test/x', events: ['regulation.watch'] });
+  const queued: string[] = [];
+  const queue = { enqueue: (kind: string) => (queued.push(kind), 'job') } as unknown as JobQueue;
+  return { events: { store, queue, publicUrl: 'http://lexc.test' }, queued };
+}
+
 describe('regulation watch', () => {
   it('finds the rules an item may affect without a model, and summarizes it from its own text', async () => {
     const { store, ws } = setup();
@@ -93,16 +102,40 @@ describe('regulation watch', () => {
     expect((await watchRegulationFeed({ store, ai }, ws, { limit: 1 })).summarized).toBe(1);
   });
 
-  it('runs after the daily feed refresh, only where the workspace’s AI is on', async () => {
+
+  it('runs after the daily feed refresh in every workspace; AI off still notes and announces, without a summary', async () => {
     const { store, ws } = setup();
+    const { events, queued } = withWebhook(store, ws);
     const { ai: fake, calls } = fakeAi();
     let mode = 'off';
-    const ai = { ...fake, settings: () => ({ mode }) } as unknown as AiGateway;
-    const deps = { store, ai, enqueueGithubScan: () => null, fetchFeed: async () => [] };
+    const ai = { complete: async (req: CompleteRequest) => (mode === 'off' ? ({ ok: false, refused: 'ai_off' } as CompleteResult) : fake.complete(req)), settings: () => ({ mode }) } as unknown as AiGateway;
+    const deps = { store, ai, events, enqueueGithubScan: () => null, fetchFeed: async () => [] };
     expect(await runDueJobs(deps, new Date('2026-12-01T02:00:00Z'))).toContain('regulation watch: 0 summaries');
     expect(calls).toHaveLength(0);
+    expect(store.feedNotes(ws).size).toBe(2);
+    expect(queued).toEqual(['event_delivery']);
     mode = 'cloud';
     expect(await runDueJobs(deps, new Date('2026-12-02T02:00:00Z'))).toContain('regulation watch: 2 summaries');
-    expect(store.feedNotes(ws).size).toBe(2);
+    // The item was announced when first noted; summarizing it later does not announce it again.
+    expect(queued).toEqual(['event_delivery']);
+  });
+
+  it('announces an affecting item once, however often the watch runs', async () => {
+    const { store, ws } = setup();
+    const { events, queued } = withWebhook(store, ws);
+    const { ai } = fakeAi(() => ({ invalid: 'bad' }));
+    await watchRegulationFeed({ store, ai, events }, ws);
+    await watchRegulationFeed({ store, ai, events }, ws);
+    expect(queued).toEqual(['event_delivery']);
+    expect(store.listOutboundDeliveries(ws)).toHaveLength(1);
+  });
+
+  it('announces an item once when two runs overlap', async () => {
+    const { store, ws } = setup();
+    const { events, queued } = withWebhook(store, ws);
+    const { ai } = fakeAi(() => ({ ok: true, json: { summary: 'Short.' } }));
+    const slow = { complete: async (req: CompleteRequest) => (await new Promise((r) => setTimeout(r, 20)), ai.complete(req)) };
+    await Promise.all([watchRegulationFeed({ store, ai: slow, events }, ws), watchRegulationFeed({ store, ai: slow, events }, ws)]);
+    expect(queued).toEqual(['event_delivery']);
   });
 });

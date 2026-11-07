@@ -80,6 +80,38 @@ describe('n8n workflow export', () => {
   });
 });
 
+describe('Event type switch', () => {
+  const rules = node('Event type').parameters.rules.values as Array<{ outputKey: string; conditions: { conditions: Array<{ leftValue: string; rightValue: string }> } }>;
+  /** Evaluates a rule's condition the way n8n would, for an event, using the same JavaScript expression. */
+  const matches = (rule: (typeof rules)[number], e: any): boolean => {
+    const c = rule.conditions.conditions[0];
+    const expr = c.leftValue.slice(4, -3); // from "={{ " ... " }}"
+    const value = vm.runInNewContext(expr, { $json: { event: e } });
+    return typeof value === 'boolean' ? value : value === c.rightValue;
+  };
+  const outputFor = (e: any) => {
+    const i = rules.findIndex((r) => matches(r, e));
+    return i === -1 ? rules.length : i;
+  };
+  const scan = (data: object) => ({ type: 'scan.completed', data: { counts: { new: 0, existing: 0, waived: 0 }, conclusion: 'success', ...data } });
+  const formatterOf = (output: number) => workflow.connections['Event type'].main[output][0].node;
+
+  it('passes scans with new findings, a failure or a pending decision, and drops the rest', () => {
+    expect(outputFor(scan({ counts: { new: 2, existing: 0, waived: 0 } }))).toBe(0);
+    expect(outputFor(scan({ conclusion: 'failure' }))).toBe(0);
+    expect(outputFor(scan({ conclusion: 'action_required' }))).toBe(0);
+    for (const conclusion of ['success', 'neutral']) expect(outputFor(scan({ conclusion }))).toBe(rules.length);
+  });
+
+  it('sends each event type to its own formatter, and the rest to Respond OK', () => {
+    expect(formatterOf(outputFor(scan({ conclusion: 'failure' })))).toBe('Format scan.completed');
+    for (const t of ['regulation.watch', 'exception.requested', 'exception.decided', 'webhook.test']) {
+      expect(formatterOf(outputFor({ type: t, data: {} })), t).toBe(`Format ${t}`);
+    }
+    expect(formatterOf(outputFor(scan({})))).toBe('Respond OK');
+  });
+});
+
 describe('Verify signature code node', () => {
   it('accepts a correctly signed body and returns the event', async () => {
     const [out] = await runCode('Verify signature', webhookItem(rawBody, signBody(SECRET, rawBody)), { LEXCOMPILER_WEBHOOK_SECRET: SECRET });
