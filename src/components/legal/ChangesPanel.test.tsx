@@ -98,9 +98,11 @@ describe('Fetch the act text', () => {
   it('fetches the amended act for a change notice and opens the new document', async () => {
     const calls = stubApi({ [`${BASE}/feed/EUR_LEX%3A32026R0999/fetch-text`]: { id: 'doc-9', clauses: [] } });
     const onOpenDocument = vi.fn(async () => undefined);
-    render(<ChangesPanel base={BASE} canEdit onChanged={async () => undefined} onOpenDocument={onOpenDocument} />);
+    const onChanged = vi.fn(async () => undefined);
+    render(<ChangesPanel base={BASE} canEdit onChanged={onChanged} onOpenDocument={onOpenDocument} />);
     fireEvent.click(await screen.findByRole('button', { name: "Fetch the act's text for 32026R0999" }));
     await waitFor(() => expect(onOpenDocument).toHaveBeenCalledWith('doc-9'));
+    expect(onChanged).toHaveBeenCalled();
     expect(calls.some((c) => c.url === `${BASE}/feed/EUR_LEX%3A32026R0999/fetch-text`)).toBe(true);
   });
 

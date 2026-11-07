@@ -60,10 +60,26 @@ export function htmlToText(html: string): string {
     .trim();
 }
 
-function clip(text: string): string {
-  if (text.length <= MAX_ACT_TEXT) return text;
-  const cut = text.lastIndexOf('\n', MAX_ACT_TEXT);
-  return text.slice(0, cut > MAX_ACT_TEXT / 2 ? cut : MAX_ACT_TEXT);
+/** Over-length text is refused, never cut: a document that silently ends half-way would be compiled as the whole act. */
+function limit(text: string): string {
+  if (text.length > MAX_ACT_TEXT) {
+    throw new StoreError(`the text is longer than ${MAX_ACT_TEXT.toLocaleString('en-US')} characters, so it was not stored; download the part you need and upload it instead`, 413);
+  }
+  return text;
+}
+
+/** The act's own title from EUR-Lex XHTML: the consecutive "oj-doc-ti" paragraphs of its heading ("REGULATION (EU) ... amending ..."). */
+export function eurLexTitle(html: string): string | null {
+  const re = /<p\b[^>]*\bclass="[^"]*\boj-doc-ti\b[^"]*"[^>]*>([\s\S]*?)<\/p>/gi;
+  const parts: string[] = [];
+  let end = -1;
+  for (let m = re.exec(html); m; m = re.exec(html)) {
+    if (parts.length > 0 && html.slice(end, m.index).trim() !== '') break;
+    const t = htmlToText(m[1]).replace(/\s+/g, ' ').trim();
+    if (t) parts.push(t);
+    end = m.index + m[0].length;
+  }
+  return parts.join(' ').slice(0, 200).trim() || null;
 }
 
 /** The CELEX number of a feed item: its document number ("CELEX:32016R0679R(02)") or its URL. */
@@ -84,21 +100,30 @@ export function celexOf(item: Pick<FeedItem, 'documentNumber' | 'url'>): string 
 /** The Cellar URL of a CELEX number; brackets must be percent-encoded (32016R0679R%2802%29). */
 export const cellarUrl = (celex: string) => `${CELLAR_RESOURCE}${encodeURIComponent(celex).replace(/\(/g, '%28').replace(/\)/g, '%29')}`;
 
-async function getOk(f: typeof fetch, url: string, init: RequestInit, what: string): Promise<Response> {
+async function getOk(f: typeof fetch, url: string, init: RequestInit, what: string, explain?: (status: number) => StoreError | undefined): Promise<Response> {
   const res = await f(url, { ...init, redirect: 'follow', signal: AbortSignal.timeout(60_000) }).catch((err: unknown) => {
     throw new StoreError(`${what} could not be reached: ${err instanceof Error ? err.message : String(err)}`, 502);
   });
-  if (!res.ok) throw new StoreError(`${what} answered ${res.status}`, res.status === 404 ? 404 : 502);
+  if (!res.ok) {
+    await res.body?.cancel().catch(() => undefined);
+    throw explain?.(res.status) ?? new StoreError(`${what} answered ${res.status}`, res.status === 404 ? 404 : 502);
+  }
   return res;
 }
 
 async function fetchEurLexText(item: FeedItem, f: typeof fetch): Promise<ActText> {
   const celex = celexOf(item);
   if (!celex) throw new StoreError('this feed item has no CELEX number to look up', 422);
-  const res = await getOk(f, cellarUrl(celex), { headers: { Accept: 'application/xhtml+xml;q=0.9, text/html;q=0.8', 'Accept-Language': 'eng' } }, 'EUR-Lex (Cellar)');
-  const text = htmlToText(await res.text());
+  // Cellar answers 404 or 406 when it holds no machine-readable text for the act (some corrigenda are published only as PDF).
+  const noText = (status: number) =>
+    status === 404 || status === 406
+      ? new StoreError(`EUR-Lex publishes no machine-readable text for ${celex} (Cellar answered ${status}); download it from EUR-Lex and upload it instead`, 422)
+      : undefined;
+  const res = await getOk(f, cellarUrl(celex), { headers: { Accept: 'application/xhtml+xml;q=0.9, text/html;q=0.8', 'Accept-Language': 'eng' } }, 'EUR-Lex (Cellar)', noText);
+  const html = await res.text();
+  const text = htmlToText(html);
   if (!text) throw new StoreError('EUR-Lex returned no text for this act', 422);
-  return { title: item.title, text: clip(text), sourceUrl: item.url ?? `https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX:${celex}`, format: 'xhtml' };
+  return { title: eurLexTitle(html) ?? item.title, text: limit(text), sourceUrl: item.url ?? `https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX:${celex}`, format: 'xhtml' };
 }
 
 async function fetchFederalRegisterText(item: FeedItem, f: typeof fetch): Promise<ActText> {
@@ -112,7 +137,7 @@ async function fetchFederalRegisterText(item: FeedItem, f: typeof fetch): Promis
   if (!source || !/^https:\/\/([a-z0-9-]+\.)*federalregister\.gov\//i.test(source)) throw new StoreError('the Federal Register has no text for this document yet', 422);
   const text = htmlToText(await (await getOk(f, source, {}, 'The Federal Register')).text());
   if (!text) throw new StoreError('the Federal Register returned no text for this document', 422);
-  return { title: meta.title || item.title, text: clip(text), sourceUrl: meta.html_url || item.url || source, format: meta.raw_text_url ? 'text' : 'xhtml' };
+  return { title: meta.title || item.title, text: limit(text), sourceUrl: meta.html_url || item.url || source, format: meta.raw_text_url ? 'text' : 'xhtml' };
 }
 
 /** The amended act's text for a feed item, from its official source. */
@@ -128,15 +153,44 @@ const isPrivateAddress = (ip: string): boolean => {
     return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || a >= 224;
   }
   if (net.isIPv6(v)) {
-    const mapped = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(v);
-    if (mapped) {
-      const [hi, lo] = [parseInt(mapped[1], 16), parseInt(mapped[2], 16)];
-      return isPrivateAddress(`${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`);
-    }
-    return v === '::' || v === '::1' || v.startsWith('fc') || v.startsWith('fd') || /^fe[89ab]/.test(v);
+    const b = ipv6Bytes(v);
+    if (!b) return true;
+    const v4 = (i: number) => `${b[i]}.${b[i + 1]}.${b[i + 2]}.${b[i + 3]}`;
+    const zero = (from: number, to: number) => b.slice(from, to).every((x) => x === 0);
+    if (zero(0, 10) && b[10] === 0xff && b[11] === 0xff) return isPrivateAddress(v4(12)); // ::ffff:a.b.c.d
+    if (zero(0, 12)) return true; // ::, ::1 and IPv4-compatible ::a.b.c.d
+    if (b[0] === 0 && b[1] === 0x64 && b[2] === 0xff && b[3] === 0x9b && zero(4, 12)) return isPrivateAddress(v4(12)); // NAT64 64:ff9b::/96
+    if (b[0] === 0x20 && b[1] === 0x02) return isPrivateAddress(v4(2)); // 6to4 2002::/16
+    // unique local fc00::/7, link-local fe80::/10, site-local fec0::/10, multicast ff00::/8
+    return (b[0] & 0xfe) === 0xfc || (b[0] === 0xfe && (b[1] & 0xc0) >= 0x80) || b[0] === 0xff;
   }
   return false;
 };
+
+/** The 16 bytes of a valid IPv6 literal (with "::" and a dotted IPv4 tail expanded), or null. */
+function ipv6Bytes(literal: string): number[] | null {
+  let s = literal.split('%')[0];
+  const dotted = /(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(s);
+  if (dotted) {
+    const o = dotted.slice(1).map(Number);
+    if (o.some((n) => n > 255)) return null;
+    s = `${s.slice(0, s.length - dotted[0].length)}${((o[0] << 8) | o[1]).toString(16)}:${((o[2] << 8) | o[3]).toString(16)}`;
+  }
+  const halves = s.split('::');
+  if (halves.length > 2) return null;
+  const head = halves[0] ? halves[0].split(':') : [];
+  const tail = halves.length === 2 && halves[1] ? halves[1].split(':') : [];
+  const fill = 8 - head.length - tail.length;
+  if (halves.length === 1 ? fill !== 0 : fill < 1) return null;
+  const groups = [...head, ...Array<string>(halves.length === 2 ? fill : 0).fill('0'), ...tail];
+  const bytes: number[] = [];
+  for (const g of groups) {
+    if (!/^[0-9a-f]{1,4}$/i.test(g)) return null;
+    const n = parseInt(g, 16);
+    bytes.push(n >> 8, n & 255);
+  }
+  return bytes.length === 16 ? bytes : null;
+}
 
 /** Only public http(s) pages: no localhost, internal names or private addresses. */
 export async function assertPublicHttpUrl(raw: string, lookup: ActTextDeps['lookup'] = async (h) => (await dns.lookup(h, { all: true })).map((a) => a.address)): Promise<URL> {
@@ -147,6 +201,7 @@ export async function assertPublicHttpUrl(raw: string, lookup: ActTextDeps['look
     throw new StoreError('that is not a valid URL');
   }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new StoreError('only http and https URLs can be imported');
+  if (url.username || url.password) throw new StoreError('the URL must not contain a user name or password');
   const host = url.hostname.replace(/^\[|\]$/g, '').toLowerCase();
   const refuse = () => new StoreError('that address is not a public web page', 400);
   const named = !net.isIP(host);
@@ -160,13 +215,27 @@ export async function assertPublicHttpUrl(raw: string, lookup: ActTextDeps['look
   return url;
 }
 
-/** A bot challenge in Browserbase's answer: WAF/Cloudflare headers, an empty 202/403/429, or next to no content. */
-function looksBlocked(r: { statusCode?: number; headers?: Record<string, unknown>; content?: unknown }): boolean {
+/** Wording of bot-check and "access denied" pages. */
+const CHALLENGE = /just a moment|verify (?:that )?you are (?:a )?human|are you a robot|checking your browser|access denied|attention required|captcha|enable javascript and cookies|unusual traffic|request blocked|pardon our interruption/i;
+
+/**
+ * What the target answered, as an error, or null when it is a page worth importing. A bot check
+ * (WAF/Cloudflare headers, 202/403/429/503, or challenge wording on a short page) is reported
+ * as blocked; any other non-2xx answer is an error page, not a document. Nothing is retried or worked around.
+ */
+function pageProblem(r: { statusCode?: number; headers?: Record<string, unknown>; content?: unknown }): StoreError | null {
   const headers = Object.fromEntries(Object.entries(r.headers ?? {}).map(([k, v]) => [k.toLowerCase(), v]));
   const content = typeof r.content === 'string' ? r.content.trim() : '';
-  if ('x-amzn-waf-action' in headers || 'cf-mitigated' in headers) return true;
-  if ([202, 403, 429].includes(Number(r.statusCode)) && !content) return true;
-  return content.length < 200;
+  const blocked = () => new StoreError(BLOCKED_MESSAGE, 422);
+  if ('x-amzn-waf-action' in headers || 'cf-mitigated' in headers) return blocked();
+  const status = Number(r.statusCode);
+  if ([202, 403, 429, 503].includes(status)) return blocked();
+  if (Number.isFinite(status) && status > 0 && (status < 200 || status >= 300)) {
+    return new StoreError(`that page answered HTTP ${status}, so it was not imported`, status >= 500 ? 502 : 422);
+  }
+  if (content.length < 3000 && CHALLENGE.test(content)) return blocked();
+  if (content.length < 200) return new StoreError('that page has almost no text, so it was not imported', 422);
+  return null;
 }
 
 /** Any public page, through Browserbase Fetch (markdown). Needs BROWSERBASE_API_KEY. */
@@ -186,8 +255,9 @@ export async function fetchUrlText(rawUrl: string, deps: ActTextDeps = {}): Prom
   if (res.status === 401 || res.status === 403) throw new StoreError('Browserbase refused the API key', 502);
   if (!res.ok) throw new StoreError(`Browserbase answered ${res.status}`, 502);
   const body = (await res.json()) as { statusCode?: number; headers?: Record<string, unknown>; content?: unknown };
-  if (looksBlocked(body)) throw new StoreError(BLOCKED_MESSAGE, 422);
-  const text = clip(String(body.content).replace(/\r\n?/g, '\n').trim());
+  const problem = pageProblem(body);
+  if (problem) throw problem;
+  const text = limit(String(body.content).replace(/\r\n?/g, '\n').trim());
   const title = /^#\s+(.+)$/m.exec(text)?.[1]?.trim() || url.hostname;
   return { title: title.slice(0, 200), text, sourceUrl: url.href, format: 'markdown' };
 }

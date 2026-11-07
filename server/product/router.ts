@@ -776,22 +776,38 @@ export function createProductRouter(store: ProductStore, oidc: OidcProvider | nu
   /**
    * "Fetch the act's text": the amended act's full text from its official source (EUR-Lex's Cellar
    * interface or the Federal Register API), stored as a regulation document linked to the item.
-   * Idempotent: an item that already has a document returns it.
+   * Idempotent: an item whose full act text was already fetched returns that document. A document
+   * linked by "Draft rule change" holds only the short feed excerpt, so it does not count; the act is
+   * then fetched and stored as its own document. Concurrent requests for one item share one fetch.
    */
+  const fetching = new Map<string, Promise<{ id: string; created: boolean }>>();
   r.post(
     '/workspaces/:workspaceId/feed/:itemId/fetch-text',
     need('editRules'),
     handle(async (req, res) => {
-      const item = store.getFeedItem(wid(req), String(req.params.itemId));
+      const workspaceId = wid(req);
+      const item = store.getFeedItem(workspaceId, String(req.params.itemId));
       if (!item) throw new StoreError('unknown feed item', 404);
-      if (item.documentId) {
-        const existing = store.getDocument(wid(req), item.documentId);
-        if (existing) return res.json({ ...existing, clauses: splitClauses(existing.text) });
+      const uploadedBy = userOf(res).id;
+      const key = `${workspaceId}\u0000${item.id}`;
+      let job = fetching.get(key);
+      if (!job) {
+        job = (async () => {
+          const known = store.findActTextDocument(workspaceId, item.id);
+          if (known) return { id: known, created: false };
+          const act = await fetchActText(item, options.actText);
+          // Re-read after the network call: another process or request may have stored it meanwhile.
+          const raced = store.findActTextDocument(workspaceId, item.id);
+          if (raced) return { id: raced, created: false };
+          const doc = store.addDocument({ workspaceId, kind: 'regulation', title: act.title, language: 'en', text: act.text, uploadedBy, fileFormat: 'official-text' });
+          store.linkDocumentToFeedItem(workspaceId, doc.id, item.id, act.sourceUrl);
+          return { id: doc.id, created: true };
+        })().finally(() => fetching.delete(key));
+        fetching.set(key, job);
       }
-      const act = await fetchActText(item, options.actText);
-      const doc = store.addDocument({ workspaceId: wid(req), kind: 'regulation', title: act.title, language: 'en', text: act.text, uploadedBy: userOf(res).id });
-      store.linkDocumentToFeedItem(wid(req), doc.id, item.id, act.sourceUrl);
-      res.status(201).json({ ...store.getDocument(wid(req), doc.id), clauses: splitClauses(act.text) });
+      const { id, created } = await job;
+      const doc = store.getDocument(workspaceId, id)!;
+      res.status(created ? 201 : 200).json({ ...doc, clauses: splitClauses(doc.text) });
     })
   );
   /** Which optional integrations this server has (the workspace shows "Import from URL" only with Browserbase). */

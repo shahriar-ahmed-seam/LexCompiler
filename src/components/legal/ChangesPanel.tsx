@@ -129,6 +129,7 @@ export function ChangesPanel({ base, canEdit, canOpenFixes = false, onChanged, o
     run(async () => {
       const doc = await api<{ id: string }>(`${base}/feed/${encodeURIComponent(item.id)}/fetch-text`, {});
       await refresh();
+      await onChanged();
       await onOpenDocument?.(doc.id);
       setMessage({ kind: 'ok', text: `The text of ${item.documentNumber} is now a document; its clauses are open.` });
     });

@@ -6,7 +6,8 @@ import type { AddressInfo } from 'node:net';
 import express from 'express';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { openDatabase } from './db/index.js';
-import { assertPublicHttpUrl, BLOCKED_MESSAGE, celexOf, cellarUrl, fetchActText, fetchUrlText, htmlToText } from './regulations/actText.js';
+import { assertPublicHttpUrl, BLOCKED_MESSAGE, celexOf, cellarUrl, eurLexTitle, fetchActText, fetchUrlText, htmlToText, MAX_ACT_TEXT } from './regulations/actText.js';
+import { MAX_CLAUSE_CHARS, splitClauses } from './product/documents.js';
 import { createProductRouter } from './product/router.js';
 import { ProductStore, StoreError, type FeedItem } from './product/store.js';
 
@@ -66,8 +67,47 @@ describe('act text from official sources', () => {
     expect(htmlToText('<p>a</p><p>b</p><script>evil()</script>')).toBe('a\n\nb');
   });
 
+  it('says so when Cellar holds no machine-readable text (a corrigendum published only as PDF)', async () => {
+    const body = 'cellar identifier 32024R1689R(04) does not hold a content datastream of the requested type';
+    for (const status of [404, 406]) {
+      const err = await fetchActText(item({}), { fetch: stub(() => new Response(body, { status })).f }).catch((e) => e);
+      expect(err).toBeInstanceOf(StoreError);
+      expect(err).toMatchObject({ status: 422 });
+      expect(err.message).toContain('no machine-readable text');
+      expect(err.message).toContain('upload');
+    }
+  });
+
+  it('titles the document with the act title from the XHTML, falling back to the feed title', async () => {
+    const html =
+      '<html><body><p class="oj-doc-ti">REGULATION (EU) 2026/1744 OF THE EUROPEAN PARLIAMENT</p><p class="oj-doc-ti">of 5 May 2026</p><p class="oj-doc-ti">amending Regulation (EU) 2024/1689 (Digital Omnibus on AI)</p><p class="oj-normal">Recital</p><p class="oj-doc-ti">ANNEX</p></body></html>';
+    expect(eurLexTitle(html)).toBe('REGULATION (EU) 2026/1744 OF THE EUROPEAN PARLIAMENT of 5 May 2026 amending Regulation (EU) 2024/1689 (Digital Omnibus on AI)');
+    const act = await fetchActText(item({ title: 'CELEX:32026R1744 amends CELEX:32024R1689' }), { fetch: stub(() => new Response(html)).f });
+    expect(act.title).toContain('Digital Omnibus on AI');
+    expect((await fetchActText(item({}), { fetch: stub(() => new Response(XHTML)).f })).title).toBe('Corrigendum to the GDPR');
+  });
+
+  it('refuses an act over the limit instead of storing it cut short', async () => {
+    const big = `<p>${'Article 1 text. '.repeat(Math.ceil(MAX_ACT_TEXT / 10))}</p>`;
+    await expect(fetchActText(item({}), { fetch: stub(() => new Response(big)).f })).rejects.toMatchObject({ status: 413 });
+    const long = `# Long\n\n${'Banks must report. '.repeat(Math.ceil(MAX_ACT_TEXT / 10))}`;
+    await expect(fetchUrlText('https://example.org/long', { fetch: stub(() => Response.json({ statusCode: 200, headers: {}, content: long })).f, browserbaseKey: 'k', lookup: publicHost })).rejects.toMatchObject({ status: 413 });
+  });
+
+  it('splits a recital preamble and repeated headings into clauses a rule card can take, with unique numbers', () => {
+    const recitals = Array.from({ length: 400 }, (_, i) => `(${i + 1}) ${'Whereas the Union needs one rule. '.repeat(5)}`).join('\n');
+    const text = `${recitals}\nArticle 1\n1. First.\nArticle 2\n1. Second.\nArticle 2\nAgain.`;
+    const clauses = splitClauses(text);
+    expect(Math.max(...clauses.map((c) => c.text.length))).toBeLessThanOrEqual(MAX_CLAUSE_CHARS);
+    expect(clauses.map((c) => c.text).join('\n').replace(/\s/g, '')).toBe(text.replace(/\s/g, ''));
+    const numbers = clauses.map((c) => c.number).filter((n): n is string => n !== null);
+    expect(new Set(numbers).size).toBe(numbers.length);
+    expect(numbers).toContain('Art. 2 pt 1');
+  });
+
   it('reports an unreachable or missing act as an error', async () => {
-    await expect(fetchActText(item({}), { fetch: stub(() => new Response('', { status: 404 })).f })).rejects.toMatchObject({ status: 404 });
+    await expect(fetchActText(item({}), { fetch: stub(() => new Response('', { status: 404 })).f })).rejects.toMatchObject({ status: 422 });
+    await expect(fetchActText(item({}), { fetch: stub(() => new Response('', { status: 500 })).f })).rejects.toMatchObject({ status: 502 });
     await expect(fetchActText(item({ documentNumber: 'bad one', url: null }), { fetch: stub(() => new Response('')).f })).rejects.toMatchObject({ status: 422 });
   });
 
@@ -105,12 +145,40 @@ describe('Import from URL (Browserbase Fetch)', () => {
     ['an empty 202', { statusCode: 202, headers: {}, content: '' }],
     ['an empty 403', { statusCode: 403, headers: {}, content: '' }],
     ['an empty 429', { statusCode: 429, headers: {}, content: '' }],
+    ['a 403 Access Denied page with a long body and no headers', { statusCode: 403, headers: {}, content: `# Access Denied\n\n${'Please verify you are human to continue. '.repeat(10)}` }],
+    ['a 429 with a long body', { statusCode: 429, headers: {}, content: `# Slow down\n\n${'Too many requests from your address. '.repeat(10)}` }],
+    ['a 503 with a long body', { statusCode: 503, headers: {}, content: `# Unavailable\n\n${'The service is busy right now. '.repeat(10)}` }],
+    ['challenge wording on a 200 page', { statusCode: 200, headers: {}, content: `# Attention Required\n\n${'Please verify you are human by completing the captcha. '.repeat(6)}` }],
     ['almost no content', { statusCode: 200, headers: {}, content: 'Just a moment...' }],
   ])('answers 422 with the upload hint on %s', async (_name, answer) => {
     const { f } = stub(() => Response.json(answer));
     const err = await fetchUrlText('https://example.org/x', { fetch: f, browserbaseKey: 'k', lookup: publicHost }).catch((e) => e);
     expect(err).toBeInstanceOf(StoreError);
     expect(err).toMatchObject({ status: 422, message: BLOCKED_MESSAGE });
+  });
+
+  it('does not store an error page: a 404 or 500 with a long body is refused, a short real page is not called blocked', async () => {
+    const body = `# Page not found\n\n${'Use the navigation to find what you need. '.repeat(10)}`;
+    const ask = (answer: object) => fetchUrlText('https://example.org/old', { fetch: stub(() => Response.json(answer)).f, browserbaseKey: 'k', lookup: publicHost }).catch((e) => e);
+    const notFound = await ask({ statusCode: 404, headers: {}, content: body });
+    expect(notFound).toMatchObject({ status: 422 });
+    expect(notFound.message).toContain('404');
+    expect(notFound.message).not.toBe(BLOCKED_MESSAGE);
+    expect(await ask({ statusCode: 410, headers: {}, content: body })).toMatchObject({ status: 422 });
+    expect(await ask({ statusCode: 500, headers: {}, content: body })).toMatchObject({ status: 502 });
+    const short = await ask({ statusCode: 200, headers: {}, content: '# Notice\n\nThe office is closed on 1 May.' });
+    expect(short).toMatchObject({ status: 422 });
+    expect(short.message).not.toBe(BLOCKED_MESSAGE);
+  });
+
+  it('refuses a URL with credentials and the IPv6 forms of private addresses', async () => {
+    await expect(assertPublicHttpUrl('https://admin:s3cret@intranet.example.com/policy', publicHost)).rejects.toBeInstanceOf(StoreError);
+    await expect(assertPublicHttpUrl('https://admin@example.com/', publicHost)).rejects.toBeInstanceOf(StoreError);
+    for (const host of ['::7f00:1', '64:ff9b::7f00:1', '2002:7f00:1::', 'fec0::1', '::ffff:10.0.0.1', '2002:c0a8:101::1', 'ff02::1', 'fe80::1']) {
+      await expect(assertPublicHttpUrl(`http://[${host}]/`, publicHost), host).rejects.toMatchObject({ status: 400 });
+    }
+    await expect(assertPublicHttpUrl('http://[2606:4700::1111]/', publicHost)).resolves.toBeInstanceOf(URL);
+    await expect(assertPublicHttpUrl('http://[64:ff9b::5db8:d822]/', publicHost)).resolves.toBeInstanceOf(URL);
   });
 
   it('needs the key, and refuses non-http, localhost and private addresses before calling out', async () => {
@@ -140,9 +208,14 @@ describe('act text routes', () => {
     ws = store.createWorkspace('FinHealth AI', owner.id).id;
     store.invite(ws, 'nusrat@example.test', 'legal', owner.id);
     store.acceptInvitations(store.upsertUser({ sub: 'nusrat', email: 'nusrat@example.test', emailVerified: true, name: 'Nusrat' }));
+    store.addFeedItems([
+      { id: 'EUR_LEX:CELEX:32019R0001', source: 'EUR_LEX', documentNumber: 'CELEX:32019R0001', title: 'Drafted act', publicationDate: '2021-03-23', agency: null, excerpt: 'Short excerpt.', url: null, kind: 'TEXT', illustrative: false },
+      { id: 'EUR_LEX:CELEX:32019R0002', source: 'EUR_LEX', documentNumber: 'CELEX:32019R0002', title: 'Raced act', publicationDate: '2021-03-23', agency: null, excerpt: 'x', url: null, kind: 'CHANGE_NOTICE', illustrative: false },
+    ]);
     store.addFeedItems([{ id: 'EUR_LEX:CELEX:32016R0679R(02)', source: 'EUR_LEX', documentNumber: 'CELEX:32016R0679R(02)', title: 'Corrigendum to the GDPR', publicationDate: '2021-03-23', agency: null, excerpt: 'x', url: null, kind: 'CHANGE_NOTICE', illustrative: false }]);
     const fakeFetch = (async (input: RequestInfo | URL) => {
       fetched.push(String(input));
+      if (String(input).includes('32019R0002')) await new Promise((r) => setTimeout(r, 150));
       if (String(input).startsWith('https://api.browserbase.com/')) return Response.json({ statusCode: 200, headers: {}, content: `# Circular\n\n${'Banks must report incidents within 24 hours. '.repeat(10)}` });
       return new Response(XHTML);
     }) as typeof fetch;
@@ -181,6 +254,29 @@ describe('act text routes', () => {
     expect(again.body.id).toBe(first.body.id);
     expect(fetched.filter((u) => u.includes('publications.europa.eu'))).toEqual(['https://publications.europa.eu/resource/celex/32016R0679R%2802%29']);
     expect((await post('/feed/nope/fetch-text')).status).toBe(404);
+  });
+
+  it('fetch-text does not take the short "Draft rule change" excerpt for the act: it fetches the full text into its own document', async () => {
+    const itemId = 'EUR_LEX:CELEX:32019R0001';
+    const excerpt = store.addDocument({ workspaceId: ws, kind: 'regulation', title: 'Drafted act', language: 'en', text: 'Short excerpt.', uploadedBy: 'x' });
+    store.linkDocumentToFeedItem(ws, excerpt.id, itemId, null);
+    expect(store.getFeedItem(ws, itemId)?.documentId).toBe(excerpt.id);
+    const first = await post(`/feed/${encodeURIComponent(itemId)}/fetch-text`);
+    expect(first.status).toBe(201);
+    expect(first.body.id).not.toBe(excerpt.id);
+    expect(first.body.text).toContain('Principles relating to processing');
+    expect(store.getFeedItem(ws, itemId)?.documentId).toBe(first.body.id);
+    const again = await post(`/feed/${encodeURIComponent(itemId)}/fetch-text`);
+    expect(again.status).toBe(200);
+    expect(again.body.id).toBe(first.body.id);
+  });
+
+  it('fetch-text for one item asked twice at once fetches once and stores one document', async () => {
+    const itemId = encodeURIComponent('EUR_LEX:CELEX:32019R0002');
+    const [a, b] = await Promise.all([post(`/feed/${itemId}/fetch-text`), post(`/feed/${itemId}/fetch-text`)]);
+    expect(a.body.id).toBe(b.body.id);
+    expect(fetched.filter((u) => u.includes('32019R0002'))).toHaveLength(1);
+    expect((store.db.prepare('SELECT COUNT(*) AS n FROM documents WHERE feed_item_id = ?').get('EUR_LEX:CELEX:32019R0002') as { n: number }).n).toBe(1);
   });
 
   it('from-url answers 503 without BROWSERBASE_API_KEY and imports with it', async () => {
