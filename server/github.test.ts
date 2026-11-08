@@ -690,6 +690,28 @@ describe('GitHub App', { timeout: 120_000 }, () => {
     }
   });
 
+  it('queues a scan.completed event to the workspace webhook when a GitHub scan finishes', async () => {
+    // The GitHub scan job's emit point (scanJob.ts): the workspace webhook gets the event even
+    // though this check run came from a push, not a local scan.
+    store.setWorkspaceWebhook(workspaceId, { url: 'https://hooks.example.test/x', events: ['scan.completed'] });
+    const sent: Array<{ kind: string; payload: { event: { id: string; type: string; workspaceId: string; data: Record<string, unknown> } } }> = [];
+    const eventQueue = { enqueue: (kind: string, payload: never) => (sent.push({ kind, payload }), 'job-evt') } as unknown as JobQueue;
+    const HEAD5 = '5'.repeat(40);
+    fake.archives.set(HEAD5, fake.archives.get(HEAD2)!);
+    const withEvents = createScanJobHandler({ store, getApp, publicUrl: 'http://lexc.test', events: { store, queue: eventQueue } });
+    await withEvents({ githubRepoId: REPO_ID, installationId: INSTALLATION, kind: 'push', trigger: 'push', headSha: HEAD5 }, { jobId: 'evt-test', attempt: 1, maxAttempts: 1 });
+
+    const scan = store.listScans(workspaceId).find((x) => x.commitSha === HEAD5)!;
+    expect(scan).toMatchObject({ status: 'completed' });
+    expect(sent).toHaveLength(1);
+    expect(sent[0].kind).toBe('event_delivery');
+    expect(sent[0].payload.event).toMatchObject({ type: 'scan.completed', workspaceId });
+    expect(sent[0].payload.event.data).toMatchObject({ repository: FULL_NAME, commit: HEAD5, trigger: 'push', conclusion: scan.conclusion, url: `http://lexc.test/app/checks/${scan.id}` });
+    // The delivery is recorded as pending for the queue to pick up.
+    expect(store.listOutboundDeliveries(workspaceId)).toMatchObject([{ eventId: sent[0].payload.event.id, eventType: 'scan.completed', status: 'pending', attempts: 0 }]);
+    store.deleteWorkspaceWebhook(workspaceId);
+  });
+
   it('maps scan summaries to check conclusions', () => {
     const s = { newCount: 0, existingCount: 3, waivedCount: 0, undecidedRuleKeys: [] as string[], perRule: [] };
     expect(checkConclusion('pull_request', s)).toBe('success');
