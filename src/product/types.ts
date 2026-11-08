@@ -242,3 +242,33 @@ export function can(role: Role | undefined, action: keyof typeof PERMS): boolean
 }
 
 export const ROLE_LABEL: Record<Role, string> = { owner: 'Owner', legal: 'Legal', engineer: 'Engineer', viewer: 'Viewer', admin: 'Administrator' };
+
+// --- Agent crew runs (server/agents/crew.ts; GET /workspaces/<id>/crew-runs) ---
+
+export type CrewGate = 'NOTHING_TO_FIX' | 'PATCH_VERIFIED' | 'PATCH_BLOCKED' | 'INCOMPLETE';
+
+export interface CrewStep {
+  stepNumber: number;
+  agentName: string;
+  pythonAdapter: string;
+  summary: string;
+  status: 'COMPLETED' | 'FAILED' | 'SKIPPED';
+  error?: string;
+  handoff: Record<string, unknown>;
+}
+
+export interface CrewRunSummary {
+  id: string;
+  startedAt: string;
+  finishedAt?: string;
+  gate: CrewGate;
+  status: 'COMPLETED' | 'FAILED';
+  latencyMs: number;
+  totalTokens?: number;
+  triggeredBy?: string | null;
+  target?: { repoFullName: string; commitSha: string };
+}
+
+export interface CrewRun extends CrewRunSummary {
+  steps: CrewStep[];
+}

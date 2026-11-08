@@ -5,6 +5,7 @@ import { useSession } from '../ProductApp';
 import { Badge, Button, Card, EmptyState, ErrorNote, Field, Link, Modal, Mono, Notice, PageHeader, RuleKey, Spinner, Table, Tabs, Td, Textarea, Th, cx, useToast } from '../ui';
 import { can, type ExceptionRecord, type Finding, type RuleSummary, type ScanRecord } from '../types';
 import { conclusionBadge } from './Overview';
+import { CrewRunsPanel } from '../CrewRunsPanel';
 
 const TRIGGER: Record<string, string> = { pull_request: 'Pull request', push: 'Push', manual: 'Rules changed', rerun: 'Re-run', connect: 'Connected', baseline: 'Baseline' };
 
@@ -23,7 +24,7 @@ function Counts({ s }: { s: ScanRecord['summary'] }) {
 export function ChecksPage() {
   const { workspace } = useSession();
   const { data, error } = useApi<ScanRecord[]>(`/workspaces/${workspace.id}/scans?limit=200`, { pollMs: 5000 });
-  const [tab, setTab] = useState<'all' | 'pr' | 'branch'>('all');
+  const [tab, setTab] = useState<'all' | 'pr' | 'branch' | 'agents'>('all');
   const scans = (data ?? []).filter((s) => s.trigger !== 'baseline');
   const shown = scans.filter((s) => (tab === 'pr' ? s.prNumber : tab === 'branch' ? !s.prNumber : true));
   return (
@@ -36,10 +37,13 @@ export function ChecksPage() {
           { id: 'all', label: 'All', count: scans.length },
           { id: 'pr', label: 'Pull requests', count: scans.filter((s) => s.prNumber).length },
           { id: 'branch', label: 'Default branch', count: scans.filter((s) => !s.prNumber).length },
+          { id: 'agents', label: 'Agent runs' },
         ]}
       />
       {error && <ErrorNote>{error}</ErrorNote>}
-      {!data ? (
+      {tab === 'agents' ? (
+        <CrewRunsPanel workspaceId={workspace.id} />
+      ) : !data ? (
         <Spinner />
       ) : shown.length === 0 ? (
         <Card>
