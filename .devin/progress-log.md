@@ -28,10 +28,18 @@ Resume anchor: read this first, then `git status` / `git log --oneline -5`.
 - PR #49 `fix/github-comment-escaping` — githubText() neutralizes @mentions/#refs/links/HTML in check summaries, annotations, review comments. CI running.
 - PR #50 `docs/merge-notes-and-handoff` — HANDOFF + MERGE_CONFLICTS open-items closed; lost "Run it" notes restored. Docs only.
 
-## Next priorities (from HANDOFF + architecture map)
-1. Deployment readiness: build prod Docker image, run `docs/DEPLOY.md` checklist locally (no deploy).
-2. Webhook emit-point e2e test gap ("no test drives the scan-job emit point end to end") — optional test hardening.
-3. Crew runs in engine console `/lab` (`GET /api/agents/crew/runs`) — optional.
+## PR summary (Nov 8) — all CI green except 51/52 pending (trivial)
+- #44 crew-runs tab on Checks · #45 webhook Settings tab · #46 FedReg fetch button · #47 CrewAI/DSPy tests (+requirements-test fix) · #48 record.mjs→/lab · #49 githubText escaping · #50 HANDOFF/merge-notes updates · #51 .dockerignore (1.96GB→~40MB context) · #52 .devin/ profiles+log
+
+## Deployment readiness validated (no deploy)
+- `docker build -f Dockerfile` clean; container refuses 0.0.0.0 without token; health 200, /api/state 401→200 w/ token; HEALTHCHECK healthy; compose config valid.
+
+## Remaining open items
+- Webhook emit-point e2e test gap; crew-runs in /lab (optional); VPS deploy (needs approval + infra); emails-in-exception-bodies + viewers-read-evidence (product decisions).
+
+## Next session
+- Custom workers (lex-*) activate from a fresh session (profile registry snapshots at startup).
+- After merge approval: merge PRs → sync Seam repo (push main to a branch + PR + merge) per HANDOFF rules.
 
 ## Gotchas learned
 - `src/contrast.test.tsx` enforces 4.5:1 text contrast on #fafafa for all `src/product/` files — never use text-zinc-400/300 for text there (icons in Links are fine).
