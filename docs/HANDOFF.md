@@ -8,7 +8,7 @@ This file covers where the work stands, how to run the demo, the demo-video scri
 
 ## Latest work (November 8, 2026)
 
-From a Devin-led session against `main` (`ec44e55`). These are open pull requests on MRSHAKILS/LexCompiler, CI green unless noted — **not yet merged**:
+From a Devin-led session against `main` (`ec44e55`). All nine PRs below are merged into `main` in both repositories:
 
 - **#44, crew runs on Checks:** the product app's Checks page has an "Agent runs" tab listing the workspace's agent-crew runs (`CrewRunsPanel`, read-only, viewer-visible; running a crew stays in `/legal`). Watch out for `src/contrast.test.tsx`: `text-zinc-400` fails the 4.5:1 check on `#fafafa` — use `text-zinc-500` for muted product text.
 - **#45, webhook Settings page:** Settings has a "Webhooks" tab (`WebhooksPanel`): endpoint, event subscriptions, the secret shown once, rotate, remove, test event, and the delivery log. Owner-only, matching the API.
