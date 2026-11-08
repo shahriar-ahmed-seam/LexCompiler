@@ -5,6 +5,7 @@ import type { RuleInEffect } from '../product/store.js';
 import type { TargetRepoFile } from '../../shared/types.js';
 import type { Suggestion } from './fixes.js';
 import { undefinedCalls } from './fixNames.js';
+import { githubText } from './markdown.js';
 
 /**
  * Model-written fixes (product guide, 5.5 item 2), for new findings that have no template fix.
@@ -89,15 +90,15 @@ export async function aiSuggestionsFor(input: {
       startLine: start,
       line: end,
       body: [
-        `**${f.ruleKey}** · ${rule.clause.title}`,
+        `**${f.ruleKey}** · ${githubText(rule.clause.title)}`,
         '',
-        f.message,
+        githubText(f.message),
         '',
         '```suggestion',
         ...replacementLines,
         '```',
         '',
-        `_AI-suggested fix (${r.model}): ${note.slice(0, 300)} LexCompiler checked it: the file parses, it calls only names the repository defines, Z3 no longer finds ${f.ruleKey} in it, and the rescan finds nothing new._`,
+        `_AI-suggested fix (${r.model}): ${githubText(note.slice(0, 300))} LexCompiler checked it: the file parses, it calls only names the repository defines, Z3 no longer finds ${f.ruleKey} in it, and the rescan finds nothing new._`,
       ].join('\n'),
     });
   }
