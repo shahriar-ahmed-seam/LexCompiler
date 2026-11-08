@@ -8,7 +8,10 @@ This file covers where the work stands, how to run the demo, the demo-video scri
 
 ## Latest work (November 8, 2026)
 
-From a Devin-led session against `main` (`ec44e55`). All nine PRs below are merged into `main` in both repositories:
+From a Devin-led session against `main` (`ec44e55`). All nine PRs below are merged into `main` in both repositories. Two follow-ups are in review:
+
+- **#54, webhook emit-point tests:** `server/scanEvents.test.ts` proves `scanLocalRepo` (the API route, the MCP tools and the nightly job share it) queues one `scan.completed` event per subscribed webhook — plus the unsubscribed, broken-queue and nightly paths. A case in `server/github.test.ts` drives the same emit point through the GitHub scan job (`createScanJobHandler`) with a capture queue. With this, every event emit point has a test.
+- **#55, crew runs in `/lab`:** the MCP & Agents tab shows a "Stored Crew Runs" section (`src/components/LabCrewRuns.tsx`): the `agent_crew_runs` rows this server stored — demo runs from `POST /api/agents/crew/runs` and runs the Python crew reports — with the Z3 gate, source, tokens and expandable steps. Read-only, on the existing `GET /api/agents/crew/runs` endpoints.
 
 - **#44, crew runs on Checks:** the product app's Checks page has an "Agent runs" tab listing the workspace's agent-crew runs (`CrewRunsPanel`, read-only, viewer-visible; running a crew stays in `/legal`). Watch out for `src/contrast.test.tsx`: `text-zinc-400` fails the 4.5:1 check on `#fafafa` — use `text-zinc-500` for muted product text.
 - **#45, webhook Settings page:** Settings has a "Webhooks" tab (`WebhooksPanel`): endpoint, event subscriptions, the secret shown once, rotate, remove, test event, and the delivery log. Owner-only, matching the API.
@@ -48,7 +51,7 @@ Everything in this section is merged into `main` in both repositories: MRSHAKILS
 - **Webhooks:**
   - ~~there is no Settings page in the web app yet~~ — done, in PR #45;
   - deliveries share the single job worker, each capped at 10 s;
-  - no test drives the scan-job emit point end to end.
+  - ~~no test drives the scan-job emit point end to end~~ — done, in PR #54.
 - **Fetch-act:**
   - ~~the Federal Register fetch has no button yet~~ — done, in PR #46;
   - the in-flight lock is per process, which is fine for one server process.
