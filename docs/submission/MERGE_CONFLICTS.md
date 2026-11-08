@@ -60,10 +60,10 @@ Both repositories built the same features separately. For each feature we kept t
 
 ## What is left open
 
-- `docs/video/tools/record.mjs` still opens `/` and waits for the old dashboard. It should open `/lab`. It was not changed because `docs/video` is out of scope.
-- Some "Run it" and Ollama notes in HANDOFF were not added back. The "Run the demo server" section covers part of them.
+- ~~`docs/video/tools/record.mjs` still opens `/` and waits for the old dashboard.~~ Fixed: it opens `/lab` now (November 8).
+- ~~Some "Run it" and Ollama notes in HANDOFF were not added back.~~ Restored: the Node 24 / `gh` / Ollama requirements, the GitHub App bootstrap, and the seed variant are back in "Run the demo server" (November 8).
 - Emails inside exception bodies are visible through shares. This was already true before the merge.
-- Text typed by users (reason, client name, names) is not escaped for Markdown or @mentions in GitHub comments. This is not new, but it is a hardening item.
+- ~~Text typed by users (reason, client name, names) is not escaped for Markdown or @mentions in GitHub comments.~~ Fixed: `githubText` (`server/github/markdown.ts`) neutralizes mentions, issue refs, links and raw HTML in check summaries, annotations and review comments (November 8). The exception-request comment stays raw on purpose — a person may legitimately want an @mention there.
 - Viewers can read signed evidence bodies in the web app. Whether they should is a product decision.
 
 ## How it was checked
