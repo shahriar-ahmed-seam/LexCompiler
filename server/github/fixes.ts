@@ -7,6 +7,7 @@ import type { RemediationPullRequest, TargetRepoFile } from '../../shared/types.
 import { GitHubApiError, type GitHubApp } from './client.js';
 import { readTarballSources } from './tarball.js';
 import { aiSuggestionsFor } from './aiFixes.js';
+import { githubText } from './markdown.js';
 import type { AiGateway } from '../ai/gateway.js';
 
 /**
@@ -216,9 +217,9 @@ export async function suggestionsFor(input: {
         startLine: h.start,
         line: h.end,
         body: [
-          `**${ruleKey}** · ${rule.clause.title}`,
+          `**${ruleKey}** · ${githubText(rule.clause.title)}`,
           '',
-          f.message,
+          githubText(f.message),
           '',
           '```suggestion',
           ...h.replacement,
@@ -279,7 +280,7 @@ export async function postSuggestions(
     body: `LexCompiler suggests ${suggestions.length === 1 ? 'a fix' : `${suggestions.length} fixes`} for new findings. Each one is proven with Z3 before it is offered.`,
     comments: suggestions.map((s) => ({
       path: s.path,
-      body: input.explanations?.has(s.fingerprint) ? `${s.body}\n\n${input.explanations.get(s.fingerprint)}` : s.body,
+      body: input.explanations?.has(s.fingerprint) ? `${s.body}\n\n${githubText(input.explanations.get(s.fingerprint)!)}` : s.body,
       side: 'RIGHT',
       line: s.line,
       ...(s.startLine < s.line ? { start_line: s.startLine, start_side: 'RIGHT' } : {}),
