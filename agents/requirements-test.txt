@@ -1,4 +1,6 @@
 pydantic-ai-slim==2.31.1
 langgraph==1.2.10
 openai-agents==0.20.0
+crewai==1.15.20
+dspy==3.3.0
 pytest>=8
