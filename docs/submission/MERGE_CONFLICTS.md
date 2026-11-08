@@ -62,9 +62,9 @@ Both repositories built the same features separately. For each feature we kept t
 
 - ~~`docs/video/tools/record.mjs` still opens `/` and waits for the old dashboard.~~ Fixed: it opens `/lab` now (November 8).
 - ~~Some "Run it" and Ollama notes in HANDOFF were not added back.~~ Restored: the Node 24 / `gh` / Ollama requirements, the GitHub App bootstrap, and the seed variant are back in "Run the demo server" (November 8).
-- Emails inside exception bodies are visible through shares. This was already true before the merge.
+- ~~Emails inside exception bodies are visible through shares.~~ Decided (November 8): kept. Evidence bodies record who acted as `{ name, email, userId }` so a signed record identifies the person unambiguously; a name alone is not unique and a user id means nothing to an auditor. A share is a deliberate, scoped, expiring disclosure made by an owner or Legal, and the human-readable surfaces (share page, `report.html`) already show names first. The pack's `README.txt` now says bodies name who acted. Stripping emails would be irreversible for the records written meanwhile; keeping them is not.
 - ~~Text typed by users (reason, client name, names) is not escaped for Markdown or @mentions in GitHub comments.~~ Fixed: `githubText` (`server/github/markdown.ts`) neutralizes mentions, issue refs, links and raw HTML in check summaries, annotations and review comments (November 8). The exception-request comment stays raw on purpose — a person may legitimately want an @mention there.
-- Viewers can read signed evidence bodies in the web app. Whether they should is a product decision.
+- ~~Viewers can read signed evidence bodies in the web app.~~ Decided (November 8): kept. `GET .../evidence` stays on `view`. The bodies hold nothing `view` does not already grant: members with emails (`/members`), exception reasons and deciders (`/exceptions`), findings by fingerprint (`/scans`), rule texts (`/rules`) and counterparties. The only addition is that a share was created or revoked (label, counterparty, period, by whom; never the token). The evidence log is the proof layer over data viewers already see, and an internal observer role is exactly who should be able to check it.
 
 ## How it was checked
 
