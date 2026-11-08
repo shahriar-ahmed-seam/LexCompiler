@@ -35,7 +35,9 @@ Resume anchor: read this first, then `git status` / `git log --oneline -5`.
 - `docker build -f Dockerfile` clean; container refuses 0.0.0.0 without token; health 200, /api/state 401→200 w/ token; HEALTHCHECK healthy; compose config valid.
 
 ## Remaining open items
-- Webhook emit-point e2e test gap; crew-runs in /lab (optional); VPS deploy (needs approval + infra); emails-in-exception-bodies + viewers-read-evidence (product decisions).
+- ~~Webhook emit-point e2e test gap~~ — done, PR #54 (scanLocalRepo + nightly + GitHub scanJob emit points, 5 tests).
+- ~~Crew-runs in /lab~~ — done, PR #55 (`LabCrewRuns` on the MCP & Agents tab, stored `agent_crew_runs`, read-only).
+- VPS deploy (needs approval + infra); emails-in-exception-bodies + viewers-read-evidence (product decisions).
 
 ## Status: DONE (Nov 8)
 - Full local suite ran before merge: typecheck/lint/test (405/406 — ruleCardAnalyze load-flake, passes standalone)/verify:cli/verify:realworld/build + pytest 10/10.
