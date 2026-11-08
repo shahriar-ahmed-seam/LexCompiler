@@ -22,7 +22,7 @@ await work.fill('#username', 'arif');
 await work.fill('#password', creds.people.arif);
 await work.click('#kc-login');
 await work.waitForURL((u) => u.toString().startsWith(APP));
-await dash.goto(`${APP}/`);
+await dash.goto(`${APP}/lab`);
 await dash.getByText('Law-to-AST Split Studio').first().waitFor({ timeout: 240000 });
 await work.goto(`${APP}/legal`);
 await work.getByText('Agent crew', { exact: false }).first().waitFor({ timeout: 30000 });
