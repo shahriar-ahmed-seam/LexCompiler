@@ -1,8 +1,12 @@
 node_modules
 .venv
+.venv-agents
 data
+repos
+backups
 dist
 dist-server
 .git
 .env
+.env.*
 *.sarif
