@@ -51,12 +51,12 @@ function RunSteps({ run }: { run: CrewRun }) {
         <li
           key={s.stepNumber}
           aria-label={`Step ${s.stepNumber}: ${s.agentName}`}
-          className={`text-[11px] font-mono ${s.status === 'SKIPPED' ? 'text-slate-500' : s.status === 'FAILED' ? 'text-rose-300' : 'text-slate-300'}`}
+          className={`text-[11px] font-mono ${s.status === 'SKIPPED' ? 'text-slate-400' : s.status === 'FAILED' ? 'text-rose-300' : 'text-slate-300'}`}
         >
           <span className="font-semibold text-slate-100">
             {s.stepNumber}. {s.agentName}
           </span>{' '}
-          <span className="text-slate-500">({s.pythonAdapter})</span>: {s.summary}
+          <span className="text-slate-400">({s.pythonAdapter})</span>: {s.summary}
           {s.error && <span> {s.error}</span>}
         </li>
       ))}
