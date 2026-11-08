@@ -9,6 +9,7 @@ import {
   Terminal,
   Zap,
 } from 'lucide-react';
+import { LabCrewRuns } from './LabCrewRuns';
 import type {
   McpServerDescriptor,
   McpToolInvocationResult,
@@ -433,6 +434,9 @@ export const McpAndAgentsHub: React.FC<McpAndAgentsHubProps> = ({
           </div>
         </div>
       )}
+
+      {/* SECTION 3: crew runs stored on this server (demo runs + imported Python crew runs) */}
+      <LabCrewRuns />
     </div>
   );
 };
