@@ -4,8 +4,9 @@ import { api, timeAgo, useApi } from '../api';
 import { useSession } from '../ProductApp';
 import { Avatar, Badge, Button, Card, EmptyState, Field, Input, Mono, Notice, PageHeader, Select, Spinner, Table, Tabs, Td, Th, cx, useToast } from '../ui';
 import { can, ROLE_LABEL, type Role } from '../types';
+import { WebhooksPanel } from '../WebhooksPanel';
 
-type Tab = 'members' | 'ai' | 'github' | 'plan';
+type Tab = 'members' | 'ai' | 'github' | 'webhooks' | 'plan';
 
 interface AiStatus {
   mode: 'off' | 'local' | 'cloud';
@@ -55,6 +56,7 @@ function Meter({ label, used, limit, hint }: { label: string; used: number; limi
 
 export function SettingsPage() {
   const params = new URLSearchParams(window.location.search);
+  const { workspace } = useSession();
   const [tab, setTab] = useState<Tab>((params.get('tab') as Tab) || 'members');
   return (
     <>
@@ -66,12 +68,14 @@ export function SettingsPage() {
           { id: 'members', label: 'Members' },
           { id: 'ai', label: 'AI' },
           { id: 'github', label: 'GitHub' },
+          { id: 'webhooks', label: 'Webhooks' },
           { id: 'plan', label: 'Plan and usage' },
         ]}
       />
       {tab === 'members' && <Members />}
       {tab === 'ai' && <AiSettings />}
       {tab === 'github' && <GitHub />}
+      {tab === 'webhooks' && <WebhooksPanel workspace={workspace} />}
       {tab === 'plan' && <Plan />}
     </>
   );
