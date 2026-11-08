@@ -106,11 +106,37 @@ describe('Fetch the act text', () => {
     expect(calls.some((c) => c.url === `${BASE}/feed/EUR_LEX%3A32026R0999/fetch-text`)).toBe(true);
   });
 
+  it('fetches the official text for a Federal Register item, next to the draft path', async () => {
+    const calls = stubApi({ [`${BASE}/feed/FEDERAL_REGISTER%3A2026-21001/fetch-text`]: { id: 'doc-7', clauses: [] } });
+    const onOpenDocument = vi.fn(async () => undefined);
+    const onChanged = vi.fn(async () => undefined);
+    render(<ChangesPanel base={BASE} canEdit onChanged={onChanged} onOpenDocument={onOpenDocument} />);
+    const item = await screen.findByRole('listitem', { name: 'Feed item 2026-21001' });
+    // The excerpt can still be drafted directly; the fetch brings the full official document.
+    expect(within(item).getByRole('button', { name: 'Draft rule change from 2026-21001' })).toBeTruthy();
+    fireEvent.click(within(item).getByRole('button', { name: "Fetch the document's text for 2026-21001" }));
+    await waitFor(() => expect(onOpenDocument).toHaveBeenCalledWith('doc-7'));
+    expect(onChanged).toHaveBeenCalled();
+    expect(calls.some((c) => c.url === `${BASE}/feed/FEDERAL_REGISTER%3A2026-21001/fetch-text`)).toBe(true);
+  });
+
+  it('does not offer the fetch to EUR-Lex text items', async () => {
+    stubApi({ [`${BASE}/feed`]: [
+      { id: 'EUR_LEX:32026R0100', source: 'EUR_LEX', documentNumber: '32026R0100', title: 'Full regulation text', publicationDate: '2026-10-26', excerpt: 'Article 1.', url: null, kind: 'TEXT', illustrative: false, documentId: null },
+    ] });
+    render(<ChangesPanel base={BASE} canEdit onChanged={async () => undefined} />);
+    await screen.findByRole('listitem', { name: 'Feed item 32026R0100' });
+    expect(screen.queryByRole('button', { name: /Fetch the document's text/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Fetch the act's text/ })).toBeNull();
+  });
+
   it('is not offered to roles that cannot edit rules', async () => {
     stubApi();
     render(<ChangesPanel base={BASE} canEdit={false} onChanged={async () => undefined} />);
     await screen.findByRole('listitem', { name: 'Feed item 32026R0999' });
+    await screen.findByRole('listitem', { name: 'Feed item 2026-21001' });
     expect(screen.queryByRole('button', { name: /Fetch the act's text/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Fetch the document's text/ })).toBeNull();
   });
 });
 

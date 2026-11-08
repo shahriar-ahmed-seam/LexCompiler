@@ -267,14 +267,24 @@ export function ChangesPanel({ base, canEdit, canOpenFixes = false, onChanged, o
                     </button>
                   )}
                 </>
-              ) : item.documentId ? (
-                <p className="text-xs text-emerald-400">Drafted as a rule.</p>
               ) : (
-                canEdit && (
-                  <button type="button" disabled={busy} onClick={() => void draft(item)} className="rounded bg-sky-700 hover:bg-sky-800 text-white px-2 py-0.5 text-xs disabled:opacity-50">
-                    Draft rule change from {item.documentNumber}
-                  </button>
-                )
+                <div className="flex flex-wrap items-center gap-2">
+                  {item.documentId ? (
+                    // A linked document may be a draft (excerpt) or the fetched official text.
+                    <span className="text-xs text-emerald-400">{item.source === 'FEDERAL_REGISTER' ? 'Linked to a document.' : 'Drafted as a rule.'}</span>
+                  ) : (
+                    canEdit && (
+                      <button type="button" disabled={busy} onClick={() => void draft(item)} className="rounded bg-sky-700 hover:bg-sky-800 text-white px-2 py-0.5 text-xs disabled:opacity-50">
+                        Draft rule change from {item.documentNumber}
+                      </button>
+                    )
+                  )}
+                  {item.source === 'FEDERAL_REGISTER' && canEdit && (
+                    <button type="button" disabled={busy} onClick={() => void fetchText(item)} className="rounded bg-sky-700 hover:bg-sky-800 text-white px-2 py-0.5 text-xs disabled:opacity-50">
+                      Fetch the document's text for {item.documentNumber}
+                    </button>
+                  )}
+                </div>
               )}
             </li>
           ))}

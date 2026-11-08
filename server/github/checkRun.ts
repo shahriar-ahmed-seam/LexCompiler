@@ -1,5 +1,6 @@
 import type { ClassifiedFinding } from '../product/scanner.js';
 import type { ScanSummary } from '../product/store.js';
+import { githubText } from './markdown.js';
 
 export const CHECK_NAME = 'LexCompiler / compliance';
 export type CheckKind = 'pull_request' | 'push';
@@ -39,7 +40,7 @@ export interface CheckOutput {
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 /** "1 January 2027" (UTC), as Legal wrote the date. */
 const longDate = (iso: string) => new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
-const cell = (s: string) => s.replace(/\|/g, '\\|').replace(/\s+/g, ' ').trim();
+const cell = (s: string) => githubText(s).replace(/\|/g, '\\|').replace(/\s+/g, ' ').trim();
 const STATE_ORDER = { new: 0, existing: 1, waived: 2 } as const;
 const LEVEL = { new: 'failure', existing: 'warning', waived: 'notice' } as const;
 
@@ -132,7 +133,7 @@ export function renderCheckOutput(input: {
         end_line: Math.max(f.startLine, f.endLine),
         annotation_level: 'warning',
         title: `${u.ruleKey} v${u.version} · from ${longDate(u.effectiveFrom)}`.slice(0, 255),
-        message: `Will fail from ${longDate(u.effectiveFrom)}: ${f.message}`.slice(0, 4000),
+        message: `Will fail from ${longDate(u.effectiveFrom)}: ${githubText(f.message)}`.slice(0, 4000),
       })
     )
   );
@@ -145,8 +146,8 @@ export function renderCheckOutput(input: {
         start_line: f.startLine,
         end_line: Math.max(f.startLine, f.endLine),
         annotation_level: LEVEL[f.state],
-        title: `${f.ruleKey} · ${titles.get(f.ruleKey) ?? ''}`.slice(0, 255),
-        message: (f.state === 'existing' ? `${f.message} (already on ${defaultBranch})` : f.state === 'waived' ? `${f.message} (waived by an approved exception)` : f.message).slice(0, 4000),
+        title: `${f.ruleKey} · ${githubText(titles.get(f.ruleKey) ?? '')}`.slice(0, 255),
+        message: (f.state === 'existing' ? `${githubText(f.message)} (already on ${defaultBranch})` : f.state === 'waived' ? `${githubText(f.message)} (waived by an approved exception)` : githubText(f.message)).slice(0, 4000),
       })
     )
     .concat(upcomingAnnotations)

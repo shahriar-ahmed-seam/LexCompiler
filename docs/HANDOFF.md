@@ -6,9 +6,20 @@ Updated October 30, 2026, after PR #40. Judging is on **December 26, 2026**.
 
 This file covers where the work stands, how to run the demo, the demo-video script, and what's next. The full plan is in `docs/PRODUCT_GUIDE.md`: section 4 has the build phases, section 5 covers AI, RAG and MCP, and section 7 has the schedule.
 
-## Latest work (November 7, 2026): start here
+## Latest work (November 8, 2026)
 
-Read this section first. Everything below is merged into `main` in both repositories: MRSHAKILS/LexCompiler and shahriar-ahmed-seam/LexCompiler. There are no open branches from this session.
+From a Devin-led session against `main` (`ec44e55`). These are open pull requests on MRSHAKILS/LexCompiler, CI green unless noted — **not yet merged**:
+
+- **#44, crew runs on Checks:** the product app's Checks page has an "Agent runs" tab listing the workspace's agent-crew runs (`CrewRunsPanel`, read-only, viewer-visible; running a crew stays in `/legal`). Watch out for `src/contrast.test.tsx`: `text-zinc-400` fails the 4.5:1 check on `#fafafa` — use `text-zinc-500` for muted product text.
+- **#45, webhook Settings page:** Settings has a "Webhooks" tab (`WebhooksPanel`): endpoint, event subscriptions, the secret shown once, rotate, remove, test event, and the delivery log. Owner-only, matching the API.
+- **#46, Federal Register fetch button:** the legal feed offers "Fetch the document's text" on Federal Register items — they ingest as `kind: 'TEXT'`, which had hidden the button even though the route already dispatches on `item.source`. Client-only change.
+- **#47, CrewAI and DSPy adapter tests:** `agents/tests/test_adapters.py` now covers all six adapters, offline. `requirements-test.txt` gained the two frameworks (same pins as `requirements.txt`). **Gotcha:** `import dspy` before `import crewai` breaks numpy in the agents venv — `crewai_horizon` must import first (noted in the test file).
+- **#48, record.mjs opens `/lab`:** the video recorder's dashboard tab now points at the engine console, not the product app.
+- **#49, GitHub comment escaping:** `server/github/markdown.ts` (`githubText`) neutralizes @mentions, `#issue` refs, link brackets and raw `<`/`>`/`&` in finding messages, rule titles, waiver text and AI notes before they reach check summaries, annotations or review comments. Fenced suggestion code, file paths, and the human-written exception comment are untouched on purpose.
+
+## November 7, 2026
+
+Everything in this section is merged into `main` in both repositories: MRSHAKILS/LexCompiler and shahriar-ahmed-seam/LexCompiler. There are no open branches from that session.
 
 ### Merged
 
@@ -35,17 +46,18 @@ Read this section first. Everything below is merged into `main` in both reposito
 ### Open items, for whoever picks them up
 
 - **Webhooks:**
-  - there is no Settings page in the web app yet; they are API only;
+  - ~~there is no Settings page in the web app yet~~ — done, in PR #45;
   - deliveries share the single job worker, each capped at 10 s;
   - no test drives the scan-job emit point end to end.
 - **Fetch-act:**
-  - the Federal Register fetch has no button yet;
+  - ~~the Federal Register fetch has no button yet~~ — done, in PR #46;
   - the in-flight lock is per process, which is fine for one server process.
 - **From the merge** (see `MERGE_CONFLICTS.md`):
-  - `docs/video/tools/record.mjs` opens `/` instead of `/lab`;
-  - some HANDOFF "Run it" notes were not added back;
-  - emails in exception bodies are visible through shares;
-  - comment text is not escaped for Markdown or @mentions.
+  - ~~`docs/video/tools/record.mjs` opens `/` instead of `/lab`~~ — done, in PR #48;
+  - ~~some HANDOFF "Run it" notes were not added back~~ — restored in [Run the demo server](#run-the-demo-server);
+  - emails in exception bodies are visible through shares (pre-existing; a product decision);
+  - ~~comment text is not escaped for Markdown or @mentions~~ — done, in PR #49.
+- **Agent adapters:** ~~no pytest coverage for the CrewAI and DSPy adapters~~ — done, in PR #47.
 - **Deployment:** the VPS deployment, which comes last.
 
 ### Local setup on Shakil's laptop (not in Git)
@@ -203,6 +215,8 @@ GitHub's "Request exception" button maps the GitHub account `shahriar-ahmed-seam
 
 ## Run the demo server
 
+Needs Node 24, `gh` signed in, and — for the local-model paths — Ollama. `ollama pull llama3.2` covers the Hermes agent's default model and `ollama pull all-minilm` the hashed-embedding fallback; `qwen2.5-coder:7b` is the optional bigger Hermes model (`LEXCOMPILER_HERMES_MODEL`).
+
 Everything the demo needs is in `.env` (gitignored): password sign-in, the DeepSeek key for rule drafting and five agents, the AI ceilings, the smee webhook URL, and a scratch copy of the fixture for the engine console.
 
 ```bash
@@ -222,6 +236,8 @@ cloudflared tunnel --url http://localhost:3001
 ```
 
 - Open `http://localhost:3001` and sign in. The original demo screens are at `/lab` ("Engine console" in the sidebar).
+- The GitHub App's credentials live in `data/github-app.json` (mode 0600). On a new machine, register a new App at `/github/register`, then install it with `/github/install`.
+- `npm run seed:demo -- --activate-builtins` creates the demo workspace with R-1 to R-4. Running it again is safe.
 - **If PR checks stop appearing,** the smee relay has probably stopped. Restart it, then redeliver the missed events from the GitHub App's settings (Advanced → Recent deliveries).
 - **Kiro is already connected.** `~/.kiro/settings/mcp.json` points at `http://localhost:3001/mcp` with a 90-day token for Tanvir ("Kiro (demo laptop)"). If Kiro shows the server as disconnected, reconnect it from Kiro's MCP panel.
 
