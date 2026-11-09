@@ -8,10 +8,11 @@ This file covers where the work stands, how to run the demo, the demo-video scri
 
 ## Latest work (November 8, 2026)
 
-From a Devin-led session against `main` (`ec44e55`). All nine PRs below are merged into `main` in both repositories. Two follow-ups are in review:
+From Devin-led sessions against `main` (`ec44e55`). All PRs below are merged into `main` in both repositories:
 
 - **#54, webhook emit-point tests:** `server/scanEvents.test.ts` proves `scanLocalRepo` (the API route, the MCP tools and the nightly job share it) queues one `scan.completed` event per subscribed webhook — plus the unsubscribed, broken-queue and nightly paths. A case in `server/github.test.ts` drives the same emit point through the GitHub scan job (`createScanJobHandler`) with a capture queue. With this, every event emit point has a test.
-- **#55, crew runs in `/lab`:** the MCP & Agents tab shows a "Stored Crew Runs" section (`src/components/LabCrewRuns.tsx`): the `agent_crew_runs` rows this server stored — demo runs from `POST /api/agents/crew/runs` and runs the Python crew reports — with the Z3 gate, source, tokens and expandable steps. Read-only, on the existing `GET /api/agents/crew/runs` endpoints.
+- **#55, crew runs in `/lab`:** the MCP & Agents tab shows a "Stored Crew Runs" section (`src/components/LabCrewRuns.tsx`): the `agent_crew_runs` rows this server stored — demo runs from `POST /api/agents/crew/runs` and runs the Python crew reports — with the Z3 gate, source, tokens and expandable steps. Read-only, on the existing `GET /api/agents/crew/runs` endpoints. Watch out for `src/contrast.test.tsx` here too: `text-slate-500` fails the 4.5:1 check on `#0f1625` — use `text-slate-400` for muted `/lab` text.
+- **#56, the two open merge questions are decided:** emails stay in signed exception bodies (a signed record must identify who acted; the pack's `README.txt` now says so) and evidence stays on `view` (bodies hold nothing `view` does not already grant). Reasoning in `MERGE_CONFLICTS.md`.
 
 - **#44, crew runs on Checks:** the product app's Checks page has an "Agent runs" tab listing the workspace's agent-crew runs (`CrewRunsPanel`, read-only, viewer-visible; running a crew stays in `/legal`). Watch out for `src/contrast.test.tsx`: `text-zinc-400` fails the 4.5:1 check on `#fafafa` — use `text-zinc-500` for muted product text.
 - **#45, webhook Settings page:** Settings has a "Webhooks" tab (`WebhooksPanel`): endpoint, event subscriptions, the secret shown once, rotate, remove, test event, and the delivery log. Owner-only, matching the API.
@@ -62,7 +63,7 @@ Everything in this section is merged into `main` in both repositories: MRSHAKILS
   - ~~viewers can read signed evidence bodies~~ — decided, kept: bodies hold nothing `view` does not already grant (details in `MERGE_CONFLICTS.md`);
   - ~~comment text is not escaped for Markdown or @mentions~~ — done, in PR #49.
 - **Agent adapters:** ~~no pytest coverage for the CrewAI and DSPy adapters~~ — done, in PR #47.
-- **Deployment:** the VPS deployment, which comes last.
+- **Deployment:** the VPS deployment, which comes last. The image builds (~40 MB context after #51), compose validates, the health/API/token guards were checked in a local container, and `docs/DEPLOY.md` now has a first-deploy walkthrough including the `LEXCOMPILER_SIGN_IN=password` path. What is left needs the owner: a VPS, a DNS name, and the actual deploy.
 
 ### Local setup on Shakil's laptop (not in Git)
 
@@ -381,9 +382,9 @@ Dates are from the schedule in the product guide, section 7.
    - `verify.mjs` can't see records removed from before the first or after the last header of a period. Cross-check the numbers with the check runs on GitHub.
 7. **Phase 6.** Done (#10). Per-tenant settings inside code (a TTL per tenant) are a later analyzer feature; until then the fix is the strictest value.
 8. **Phase 7.** Ready to deploy (#11). Still to do, with the owner:
-   - The owner runs it on their own PC for now (Cloudflare quick tunnel); the VPS comes last. Then follow `docs/DEPLOY.md`, including its checklist.
-   - Build the Docker image once (`docker compose -f deploy/docker-compose.prod.yml … up -d --build`) and run the checklist against it.
-   - Point the GitHub App's webhook and the Keycloak redirect at the public URL.
+   - The owner runs it on their own PC for now (Cloudflare quick tunnel); the VPS comes last. Then follow `docs/DEPLOY.md`, including its first-deploy walkthrough and checklist.
+   - ~~Build the Docker image once and run the checklist against it~~ done locally: the image builds clean (~40 MB context after the `.dockerignore` fix), refuses `0.0.0.0` without a token, serves `/api/health`, guards `/api` with the token, and its HEALTHCHECK goes healthy. Compose config validates.
+   - Point the GitHub App's webhook and the sign-in redirect at the public URL.
    Then the freeze from Dec 20 to 25.
 
 ## The agent crew in detail (ported from upstream PR #40)

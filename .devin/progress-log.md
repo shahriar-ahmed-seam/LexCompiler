@@ -60,3 +60,10 @@ Resume anchor: read this first, then `git status` / `git log --oneline -5`.
 - Branch → PR → CI green → merge; never push to main; local git identity only; no AI attribution trailers.
 - `npm test` + `npm run verify:cli` minimum before merge; full gate = typecheck, lint, test, verify:cli, verify:realworld, build + pytest agents.
 - No secrets (`data/`, `.env*`, `repos/`), no destructive DB ops, no model-provider changes inside LexCompiler.
+
+## Status: Nov 9 — all PRs merged, repos synced
+- PR #54 (scan.completed emit tests) + #55 (/lab crew runs) merged on origin after green CI; Seam sync #50 merged.
+- PR #56 (evidence product decisions: keep emails in bodies, keep evidence on view; README line added) merged; Seam sync #51 merged. Trees identical: `70dc164`.
+- `MERGE_CONFLICTS.md` "left open" list is now fully resolved.
+- In flight: `docs/first-deploy` — DEPLOY.md first-deploy walkthrough + `LEXCOMPILER_SIGN_IN` in env example + HANDOFF status lines.
+- **Remaining:** actual VPS deploy (needs owner: VPS + DNS name + go-ahead; walkthrough in DEPLOY.md); fresh-session check that lex-* workers spawn; `ruleCardAnalyze` proxy-flake fix (optional); demo-account rotation note for the VPS (covered by demo-accounts.txt guidance).
