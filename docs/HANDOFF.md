@@ -58,7 +58,8 @@ Everything in this section is merged into `main` in both repositories: MRSHAKILS
 - **From the merge** (see `MERGE_CONFLICTS.md`):
   - ~~`docs/video/tools/record.mjs` opens `/` instead of `/lab`~~ — done, in PR #48;
   - ~~some HANDOFF "Run it" notes were not added back~~ — restored in [Run the demo server](#run-the-demo-server);
-  - emails in exception bodies are visible through shares (pre-existing; a product decision);
+  - ~~emails in exception bodies are visible through shares~~ — decided, kept: signed records must identify who acted; the pack's `README.txt` says so (details in `MERGE_CONFLICTS.md`);
+  - ~~viewers can read signed evidence bodies~~ — decided, kept: bodies hold nothing `view` does not already grant (details in `MERGE_CONFLICTS.md`);
   - ~~comment text is not escaped for Markdown or @mentions~~ — done, in PR #49.
 - **Agent adapters:** ~~no pytest coverage for the CrewAI and DSPy adapters~~ — done, in PR #47.
 - **Deployment:** the VPS deployment, which comes last.
