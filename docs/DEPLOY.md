@@ -64,6 +64,42 @@ docker compose -f deploy/docker-compose.prod.yml --env-file deploy/.env.producti
 - **GitHub App:** register it from the server (`https://<domain>/github/register`) or set its values in the env file. Then install it on the test repository.
 - **Coding assistants:** update the MCP URL to `https://<domain>/mcp` in each one (guide, section 5.9).
 
+### First deploy, step by step
+
+Never put a server on the internet before? The whole thing is: rent a small Linux machine, point a name at it, run a few commands, walk the checklist below. Budget about an hour, most of it waiting for the image to build.
+
+1. **Rent a VPS.** Any provider works — Hetzner (CX22, ~€4/month) or DigitalOcean ($6 droplet) are the cheap common picks. Choose **Ubuntu 24.04**. When it asks for an SSH key, paste the public half of a key made with `ssh-keygen -t ed25519` (creates `~/.ssh/id_ed25519`; the `.pub` file is the public half). Note the machine's IP address.
+2. **Point a name at it.** Caddy cannot get a certificate for a bare IP, so a real DNS name is required. In the domain's DNS page, add an `A` record: `lexc` → the IP, giving `lexc.example.com`. No domain? A free DuckDNS subdomain works for a trial.
+3. **Connect:** `ssh root@<ip>` (or the user the provider gave). Everything below runs on the VPS.
+4. **Install Docker and a firewall:**
+
+   ```bash
+   apt update && apt install -y docker.io docker-compose-v2 git ufw
+   ufw allow 22,80,443/tcp && ufw --force enable
+   ```
+
+5. **Clone and configure** (the commands from the section header). In `deploy/.env.production`: set the four domain lines, and generate the token on the VPS with `openssl rand -base64 32`.
+6. **Pick a sign-in mode.** The compose stack has no OIDC provider, so a first deploy uses the built-in password sign-in: `LEXCOMPILER_SIGN_IN=password`. Keycloak or another OIDC provider can be added later. Then start the stack (the first build takes several minutes; `docker compose -f deploy/docker-compose.prod.yml logs -f` watches it — the app is up once Caddy gets the certificate, which retries until the DNS record resolves).
+7. **Create the sign-in accounts** (once, still on the VPS):
+
+   ```bash
+   docker compose -f deploy/docker-compose.prod.yml exec lexcompiler \
+     node dist-server/server/cli/seed-demo.js --accounts
+   ```
+
+   Passwords are written to `demo-accounts.txt` in the data volume (mode 0600). Read them with `docker compose -f deploy/docker-compose.prod.yml exec lexcompiler cat /app/data/demo-accounts.txt`, hand each person their own, and treat that file like a secret.
+8. **Walk the checklist below** — every line of it — before sharing the URL.
+9. **Extras, when wanted:** the GitHub App (`https://<domain>/github/register` from a signed-in browser, then install it on the test repository); `LEXCOMPILER_LLM_*` for cloud models; OIDC to replace password sign-in.
+10. **Local models:** the polyglot-AST agent expects a local Ollama, which the compose file does not include. To add one, run it on the app's own network — never publish port 11434, Ollama has no sign-in:
+
+    ```bash
+    docker run -d --name ollama --network deploy_default ollama/ollama
+    docker exec ollama ollama pull qwen2.5-coder:7b
+    ```
+
+    then set `OLLAMA_HOST=http://ollama:11434` in `deploy/.env.production` and restart. The other agents and all deterministic features run without it.
+11. **Updating later:** `cd LexCompiler && git pull`, then the same `docker compose … up -d --build` line. Data survives in the volumes; a dated backup appears in the backups volume once a day.
+
 ## Before anyone else uses it
 
 - [ ] HTTPS only: `LEXCOMPILER_PUBLIC_URL` starts with `https://` and `LEXCOMPILER_TRUST_PROXY` is set. `curl -I http://<domain>/` redirects (Caddy, 308); responses carry `Strict-Transport-Security`.
