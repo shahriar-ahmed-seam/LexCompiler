@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { BookOpen, Bot, Cpu, Database, Scale, ShieldCheck, Sparkles, Zap } from 'lucide-react';
+import { BookOpen, Bot, Braces, Cpu, Database, Scale, ShieldCheck, Sparkles, Zap } from 'lucide-react';
 import { AppSidebar, type WorkspaceNavItem } from './components/AppSidebar';
+import { ApiDocsView } from './components/ApiDocsView';
 import { CommandBar } from './components/CommandBar';
 import { ArchitectureGraphCanvas } from './components/ArchitectureGraphCanvas';
 import { EnterpriseStartupSuite } from './components/EnterpriseStartupSuite';
@@ -29,9 +30,10 @@ type ActiveWorkspaceTab =
   | 'MCP_AND_AGENTS'
   | 'HYBRID_GRAPH_RAG'
   | 'TOKEN_AND_DATA_STACK'
+  | 'API_DOCS'
   | 'LIVE_DOCS_AND_RUBRIC';
 
-/** Ctrl/⌘ + 1–7 open the modules in sidebar order. */
+/** Ctrl/⌘ + 1–8 open the modules in sidebar order. */
 const TAB_SHORTCUT_ORDER: ActiveWorkspaceTab[] = [
   'LAW_TO_AST_STUDIO',
   'MULTI_LLM_SERVICE_MESH',
@@ -39,6 +41,7 @@ const TAB_SHORTCUT_ORDER: ActiveWorkspaceTab[] = [
   'MCP_AND_AGENTS',
   'HYBRID_GRAPH_RAG',
   'TOKEN_AND_DATA_STACK',
+  'API_DOCS',
   'LIVE_DOCS_AND_RUBRIC',
 ];
 
@@ -441,10 +444,17 @@ export function App() {
       icon: <Zap className="w-4 h-4 text-emerald-300" />,
     },
     {
+      id: 'API_DOCS',
+      label: 'API Reference',
+      sublabel: 'REST · MCP · Webhooks',
+      shortcutDigit: 7,
+      icon: <Braces className="w-4 h-4 text-sky-300" />,
+    },
+    {
       id: 'LIVE_DOCS_AND_RUBRIC',
       label: 'Architecture & Specs (/docs)',
       sublabel: 'Formal Grammar & Prompts',
-      shortcutDigit: 7,
+      shortcutDigit: 8,
       icon: <BookOpen className="w-4 h-4 text-zinc-300" />,
     },
   ];
@@ -580,7 +590,14 @@ export function App() {
           </main>
         )}
 
-        {/* VIEW 7: Live /docs Whitepaper, Prompt Library & 425-Pt Submission Guide */}
+        {/* VIEW 7: API Reference — the server's HTTP surface, documented in src/apiDocs.ts */}
+        {workspaceTab === 'API_DOCS' && (
+          <main className="flex-1 overflow-y-auto p-4">
+            <ApiDocsView />
+          </main>
+        )}
+
+        {/* VIEW 8: Live /docs Whitepaper, Prompt Library & 425-Pt Submission Guide */}
         {workspaceTab === 'LIVE_DOCS_AND_RUBRIC' && (
           <main className="flex-1 overflow-y-auto">
             <LiveDocsAndRubricView promptLibrary={promptLibrary} />
