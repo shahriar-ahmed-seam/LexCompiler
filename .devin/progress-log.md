@@ -67,3 +67,9 @@ Resume anchor: read this first, then `git status` / `git log --oneline -5`.
 - `MERGE_CONFLICTS.md` "left open" list is now fully resolved.
 - In flight: `docs/first-deploy` — DEPLOY.md first-deploy walkthrough + `LEXCOMPILER_SIGN_IN` in env example + HANDOFF status lines.
 - **Remaining:** actual VPS deploy (needs owner: VPS + DNS name + go-ahead; walkthrough in DEPLOY.md); fresh-session check that lex-* workers spawn; `ruleCardAnalyze` proxy-flake fix (optional); demo-account rotation note for the VPS (covered by demo-accounts.txt guidance).
+
+## Status: API Reference page shipped, skills installed globally
+- PR #57 (first-deploy walkthrough) merged; Seam sync #52 merged.
+- PR #58 (Modelflare-style API Reference tab in /lab: `src/apiDocs.ts` + `ApiDocsView.tsx`, ~60 endpoints, search, curl examples) merged after green CI; Seam sync #53 merged. Repo trees identical (empty diff).
+- 160 agent skills installed globally under `%APPDATA%\devin\skills\` (junctioned to `~/.agents/skills` + `~/.claude/skills`): superpowers, caveman set, ponytail set, graphify, ui-ux-pro-max, design-taste-frontend, karpathy-guidelines, anthropic skills, matt-riley agent-skills grab-bag. Available to every project in new sessions.
+- **Remaining:** actual VPS deploy (needs owner: VPS + DNS name + go-ahead; walkthrough in `docs/DEPLOY.md`); fresh-session check that lex-* workers spawn; `ruleCardAnalyze` proxy-flake fix (optional).
